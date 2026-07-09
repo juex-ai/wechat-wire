@@ -1,0 +1,68 @@
+# Architecture
+
+`wechat-wire` is a single binary that wraps the upstream WeChat iLink Bot Go SDK.
+
+```
++----------------------------+
+| wechat-wire CLI            |
+|                            |
+|  login/status/user/listen  |
+|  mcp (stdio server)        |
++-------------+--------------+
+              |
+              v
++----------------------------+
+| bot.Client interface       |
+| - real SDK adapter         |
+| - fake localtest adapter   |
++-------------+--------------+
+              |
+              v
++----------------------------+
+| github.com/corespeed-io/   |
+| wechatbot/golang           |
++----------------------------+
+```
+
+## CLI
+
+Commands:
+
+- `version` — build metadata.
+- `status` — config directory, base URL override, credential path, login state, known user count.
+- `login` — invokes the upstream QR login flow and persists SDK credentials.
+- `listen` — logs in, receives incoming messages through the SDK listener, prints them, and records users locally.
+- `user list|show|forget` — manages the local user book.
+- `mcp` — starts a stdio MCP server.
+
+## MCP
+
+The MCP server logs in through the same SDK adapter and starts the message listener after MCP initialization. Incoming WeChat messages are recorded in the local user book and forwarded as `notifications/claude/channel` notifications when supported.
+
+Tools:
+
+- `wechat_wire_status`
+- `wechat_wire_list_users`
+- `wechat_wire_send_message`
+- `wechat_wire_send_typing`
+- `wechat_wire_forget_user`
+
+The upstream SDK only allows proactive `Send` after it has a `context_token` for the target user. In practice, that means the long-lived `mcp` or `listen` process should receive a message from the user before sending to that user.
+
+## Storage
+
+Default config directory:
+
+```text
+$HOME/.config/wechat-wire/
+```
+
+Files:
+
+- `credentials.json` — upstream SDK credentials.
+- `users.json` — local user book with `user_id`, last message metadata, message count, and whether a context was observed.
+
+## Test Backend
+
+`WECHAT_WIRE_FAKE=1` switches the bot factory to an in-process fake implementation. Fake messages are supplied with `WECHAT_WIRE_FAKE_MESSAGES_JSON`, allowing CLI and MCP tests to run without a real WeChat login.
+

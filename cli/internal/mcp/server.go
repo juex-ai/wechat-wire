@@ -1,0 +1,357 @@
+package mcp
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/signal"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/juex-ai/wechat-wire/cli/internal/bot"
+	"github.com/juex-ai/wechat-wire/cli/internal/config"
+	"github.com/juex-ai/wechat-wire/cli/internal/status"
+	"github.com/juex-ai/wechat-wire/cli/internal/store"
+)
+
+const channelCapabilityName = "claude/channel"
+
+// Server is the MCP stdio bridge for WeChat iLink Bot messages.
+type Server struct {
+	mcpServer *sdkmcp.Server
+	session   *sdkmcp.ServerSession
+	transport *channelTransport
+
+	version      string
+	forceChannel bool
+	factory      bot.Factory
+
+	mu           sync.Mutex
+	runCtx       context.Context
+	botClient    bot.Client
+	botStarted   bool
+	channelReady bool
+}
+
+// NewServer creates an MCP server.
+func NewServer(version string, forceChannel bool, factory bot.Factory) *Server {
+	if factory == nil {
+		factory = bot.NewFromEnv
+	}
+	return &Server{version: version, forceChannel: forceChannel, factory: factory}
+}
+
+// Run starts the MCP server and blocks until its context is cancelled.
+func (s *Server) Run(ctx context.Context) error {
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	s.mu.Lock()
+	s.runCtx = ctx
+	s.mu.Unlock()
+
+	s.mcpServer = sdkmcp.NewServer(&sdkmcp.Implementation{
+		Name:    "wechat-wire",
+		Version: s.version,
+	}, &sdkmcp.ServerOptions{
+		Instructions: `You are connected to wechat-wire, a WeChat iLink Bot MCP bridge.
+
+Incoming WeChat messages arrive as channel notifications when the client supports the experimental claude/channel capability or the server is started with --channel.
+
+Available tools:
+- wechat_wire_status: inspect runtime status.
+- wechat_wire_list_users: list locally observed WeChat users.
+- wechat_wire_send_message: send a text message to a user. The active MCP process must have received context for that user from WeChat first.
+- wechat_wire_send_typing: show or stop the typing indicator for a user.
+- wechat_wire_forget_user: remove a user from the local user book.
+`,
+		Capabilities:       s.serverCapabilities(),
+		InitializedHandler: s.onInitialized,
+		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})),
+	})
+	s.registerTools()
+	s.transport = newChannelTransport(&sdkmcp.StdioTransport{})
+	return s.mcpServer.Run(ctx, s.transport)
+}
+
+func (s *Server) registerTools() {
+	type statusArgs struct{}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_status",
+		Description: "Show current wechat-wire version, work directory, credential path, login status, and known user count.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args statusArgs) (*sdkmcp.CallToolResult, any, error) {
+		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: status.Runtime(s.version)}}}, nil, nil
+	})
+
+	type listUsersArgs struct{}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_list_users",
+		Description: "List locally observed WeChat users and their last message metadata.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args listUsersArgs) (*sdkmcp.CallToolResult, any, error) {
+		users, err := store.ListUsers(config.UsersPath())
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		if len(users) == 0 {
+			return toolText("No users observed yet."), nil, nil
+		}
+		lines := make([]string, 0, len(users))
+		for _, user := range users {
+			lines = append(lines, fmt.Sprintf("%s last_seen=%s messages=%d type=%s has_context=%t text=%q",
+				user.UserID, safeISO(user.LastSeenAt), user.MessageCount, user.LastType, user.HasContext, user.LastText))
+		}
+		return toolText(strings.Join(lines, "\n")), nil, nil
+	})
+
+	type sendMessageArgs struct {
+		UserID string `json:"user_id" jsonschema:"WeChat user ID observed from an incoming message"`
+		Text   string `json:"text" jsonschema:"Text message to send"`
+	}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_send_message",
+		Description: "Send a text message to a WeChat user. Requires active context from a message received in this process.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args sendMessageArgs) (*sdkmcp.CallToolResult, any, error) {
+		if args.UserID == "" {
+			return toolError(fmt.Errorf("user_id is required")), nil, nil
+		}
+		if args.Text == "" {
+			return toolError(fmt.Errorf("text is required")), nil, nil
+		}
+		client, err := s.ensureBot(ctx)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		if err := client.Send(ctx, args.UserID, args.Text); err != nil {
+			return toolError(err), nil, nil
+		}
+		return toolText(fmt.Sprintf("ok: sent to %s", args.UserID)), nil, nil
+	})
+
+	type typingArgs struct {
+		UserID string `json:"user_id" jsonschema:"WeChat user ID observed from an incoming message"`
+		Active bool   `json:"active" jsonschema:"true to show typing, false to stop typing"`
+	}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_send_typing",
+		Description: "Show or stop the WeChat typing indicator for a user.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args typingArgs) (*sdkmcp.CallToolResult, any, error) {
+		if args.UserID == "" {
+			return toolError(fmt.Errorf("user_id is required")), nil, nil
+		}
+		client, err := s.ensureBot(ctx)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		if args.Active {
+			if err := client.SendTyping(ctx, args.UserID); err != nil {
+				return toolError(err), nil, nil
+			}
+			return toolText(fmt.Sprintf("ok: typing started for %s", args.UserID)), nil, nil
+		}
+		if err := client.StopTyping(ctx, args.UserID); err != nil {
+			return toolError(err), nil, nil
+		}
+		return toolText(fmt.Sprintf("ok: typing stopped for %s", args.UserID)), nil, nil
+	})
+
+	type forgetUserArgs struct {
+		UserID string `json:"user_id" jsonschema:"WeChat user ID to forget locally"`
+	}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_forget_user",
+		Description: "Remove a WeChat user from the local user book.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args forgetUserArgs) (*sdkmcp.CallToolResult, any, error) {
+		if args.UserID == "" {
+			return toolError(fmt.Errorf("user_id is required")), nil, nil
+		}
+		removed, err := store.ForgetUser(config.UsersPath(), args.UserID)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		if !removed {
+			return toolText(fmt.Sprintf("not found: %s", args.UserID)), nil, nil
+		}
+		return toolText(fmt.Sprintf("forgot: %s", args.UserID)), nil, nil
+	})
+}
+
+func (s *Server) onInitialized(ctx context.Context, req *sdkmcp.InitializedRequest) {
+	s.setSession(req.Session)
+	allowed := s.channelAllowed(req.Session)
+	s.setChannelReady(allowed)
+	if !allowed {
+		s.log("client did not declare %s capability; notifications disabled", channelCapabilityName)
+		return
+	}
+	s.log("starting WeChat listener")
+	if _, err := s.ensureBot(ctx); err != nil {
+		s.sendChannelNotification(fmt.Sprintf("wechat-wire listener failed: %v", err), "error", "", "")
+	}
+}
+
+func (s *Server) ensureBot(ctx context.Context) (bot.Client, error) {
+	s.mu.Lock()
+	if s.botClient != nil {
+		client := s.botClient
+		s.mu.Unlock()
+		return client, nil
+	}
+	baseCtx := s.runCtx
+	if baseCtx == nil {
+		baseCtx = ctx
+	}
+	client := s.factory(s.botOptions())
+	s.botClient = client
+	if s.botStarted {
+		s.mu.Unlock()
+		return client, nil
+	}
+	s.botStarted = true
+	s.mu.Unlock()
+
+	client.OnMessage(s.handleMessage)
+	if _, err := client.Login(baseCtx, false); err != nil {
+		return nil, err
+	}
+	go func() {
+		if err := client.Run(baseCtx); err != nil && baseCtx.Err() == nil {
+			s.log("listener exited: %v", err)
+			s.sendChannelNotification(fmt.Sprintf("wechat-wire listener exited: %v", err), "error", "", "")
+		}
+	}()
+	return client, nil
+}
+
+func (s *Server) botOptions() bot.Options {
+	return bot.Options{
+		BaseURL:  config.BaseURL(),
+		CredPath: config.CredentialPath(),
+		LogLevel: config.LogLevel(),
+		BotAgent: config.BotAgent(s.version),
+		OnQRURL: func(url string) {
+			s.log("scan QR URL: %s", url)
+		},
+		OnScanned: func() {
+			s.log("QR scanned")
+		},
+		OnExpired: func() {
+			s.log("QR expired")
+		},
+		OnError: func(err error) {
+			s.log("sdk error: %v", err)
+		},
+		OnVerifyCode: func(isRetry bool) (string, error) {
+			if code := os.Getenv("WECHAT_WIRE_VERIFY_CODE"); code != "" {
+				return code, nil
+			}
+			return "", fmt.Errorf("verification code required; set WECHAT_WIRE_VERIFY_CODE and restart")
+		},
+	}
+}
+
+func (s *Server) handleMessage(msg *bot.IncomingMessage) {
+	if msg == nil {
+		return
+	}
+	if err := store.RememberUser(config.UsersPath(), *msg); err != nil {
+		s.log("remember user: %v", err)
+	}
+	content := fmt.Sprintf("wechat-wire message from user_id=%s type=%s at %s\n%s",
+		msg.UserID, msg.Type, msg.Timestamp.Local().Format("2006-01-02 15:04:05"), msg.Text)
+	s.sendChannelNotification(content, "message", msg.UserID, msg.Type)
+}
+
+func (s *Server) setSession(session *sdkmcp.ServerSession) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.session = session
+}
+
+func (s *Server) getSession() *sdkmcp.ServerSession {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.session
+}
+
+func (s *Server) setChannelReady(ready bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.channelReady = ready
+}
+
+func (s *Server) canNotifyChannel() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.channelReady
+}
+
+func (s *Server) sendChannelNotification(content, eventType, userID, messageType string) {
+	if !s.canNotifyChannel() || s.getSession() == nil || s.transport == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	params := channelNotification{
+		Content: content,
+		Meta: channelNotificationMeta{
+			EventType:   eventType,
+			UserID:      userID,
+			MessageType: messageType,
+		},
+	}
+	if err := s.transport.Notify(ctx, "notifications/claude/channel", params); err != nil {
+		s.log("failed to send notification: %v", err)
+	}
+}
+
+func (s *Server) serverCapabilities() *sdkmcp.ServerCapabilities {
+	return &sdkmcp.ServerCapabilities{
+		Tools: &sdkmcp.ToolCapabilities{ListChanged: true},
+		Experimental: map[string]any{
+			channelCapabilityName: map[string]any{},
+		},
+	}
+}
+
+func supportsChannel(session *sdkmcp.ServerSession) bool {
+	if session == nil {
+		return false
+	}
+	params := session.InitializeParams()
+	if params == nil || params.Capabilities == nil {
+		return false
+	}
+	_, ok := params.Capabilities.Experimental[channelCapabilityName]
+	return ok
+}
+
+func (s *Server) channelAllowed(session *sdkmcp.ServerSession) bool {
+	return s.forceChannel || supportsChannel(session)
+}
+
+func (s *Server) log(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[wechat-wire] "+format+"\n", args...)
+}
+
+func toolText(text string) *sdkmcp.CallToolResult {
+	return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}}}
+}
+
+func toolError(err error) *sdkmcp.CallToolResult {
+	return &sdkmcp.CallToolResult{
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: fmt.Sprintf("error: %v", err)}},
+		IsError: true,
+	}
+}
+
+func safeISO(sec int64) string {
+	if sec == 0 {
+		return "(never)"
+	}
+	return time.Unix(sec, 0).Local().Format(time.RFC3339)
+}
