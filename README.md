@@ -4,6 +4,8 @@ WeChat iLink Bot CLI and MCP bridge.
 
 `wechat-wire` wraps the MIT-licensed Go SDK at `github.com/corespeed-io/wechatbot/golang` into one binary. The CLI handles login, status, message listening, and a local user book. The `mcp` command runs a stdio MCP server that forwards incoming WeChat messages to agents and exposes tools for sending messages back to users.
 
+Internally, CLI and MCP share a WeChat Session module that owns the User Book and context-backed sends, so the direct CLI flow and the MCP tool flow exercise the same sending rules.
+
 ## Quick Start
 
 ```bash

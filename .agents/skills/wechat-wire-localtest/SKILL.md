@@ -16,6 +16,7 @@ After completing any code change, build the binary, run affected unit tests, and
 3. **Run E2E tests** — `./tests/run.sh all`
    - Uses `WECHAT_WIRE_FAKE=1`
    - Verifies direct CLI `listen --once` plus `msg send`
+   - Verifies CLI and MCP both cross the WeChat Session seam for context-backed sends
    - Starts `bin/wechat-wire mcp`
    - Verifies incoming fake messages become MCP notifications
    - Verifies MCP tools can list users and send a fake reply
