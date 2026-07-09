@@ -56,3 +56,32 @@ func TestResolveDirRejectsRelativeHomeDirWithParentTraversal(t *testing.T) {
 		t.Fatal("expected nested parent traversal error, got nil")
 	}
 }
+
+func TestCredentialPathStaysUnderConfigDir(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("WECHAT_WIRE_CRED_PATH", filepath.Join(t.TempDir(), "credentials.json"))
+	if err := SetHomeDir(root); err != nil {
+		t.Fatalf("SetHomeDir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = SetHomeDir("")
+	})
+
+	got := CredentialPath()
+	want := filepath.Join(root, ".config", "wechat-wire", "credentials.json")
+	if got != want {
+		t.Fatalf("CredentialPath: got %q want %q", got, want)
+	}
+}
+
+func TestSDKOptionsIgnoreEnvironmentOverrides(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_LOG_LEVEL", "debug")
+	t.Setenv("WECHAT_WIRE_BOT_AGENT", "custom-agent")
+
+	if got := LogLevel(); got != "info" {
+		t.Fatalf("LogLevel: got %q want %q", got, "info")
+	}
+	if got := BotAgent("test-version"); got != "wechat-wire/test-version" {
+		t.Fatalf("BotAgent: got %q want %q", got, "wechat-wire/test-version")
+	}
+}

@@ -379,7 +379,6 @@ func newSession(events io.Writer, verifyCode string) *session.Session {
 
 func botOptions(events io.Writer, verifyCode string) bot.Options {
 	return bot.Options{
-		BaseURL:  config.BaseURL(),
 		CredPath: config.CredentialPath(),
 		LogLevel: config.LogLevel(),
 		BotAgent: config.BotAgent(version),
@@ -398,9 +397,6 @@ func botOptions(events io.Writer, verifyCode string) bot.Options {
 		OnVerifyCode: func(isRetry bool) (string, error) {
 			if verifyCode != "" {
 				return verifyCode, nil
-			}
-			if code := os.Getenv("WECHAT_WIRE_VERIFY_CODE"); code != "" {
-				return code, nil
 			}
 			prompt := "verify code"
 			if isRetry {

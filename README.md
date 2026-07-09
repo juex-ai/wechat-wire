@@ -64,11 +64,13 @@ For direct CLI sends, `wechat-wire listen` records the latest context token for 
 | Variable | Default | Description |
 | --- | --- | --- |
 | `WECHAT_WIRE_DIR` | `$HOME/.config/wechat-wire` | Base config directory input; normalized to `.config/wechat-wire`. |
-| `WECHAT_WIRE_CRED_PATH` | `<config-dir>/credentials.json` | Upstream SDK credential file. |
-| `WECHAT_WIRE_BASE_URL` | SDK default | Optional iLink base URL override. |
-| `WECHAT_WIRE_LOG_LEVEL` | `info` | SDK log level. |
-| `WECHAT_WIRE_BOT_AGENT` | `wechat-wire/<version>` | SDK `bot_agent` identity. |
-| `WECHAT_WIRE_VERIFY_CODE` | unset | Non-interactive pairing code when WeChat requests verification. |
+
+Runtime state is intentionally kept under the config directory:
+
+- `credentials.json` — upstream SDK credentials.
+- `users.json` — locally observed users and latest reply context.
+
+SDK internals such as base URL, credential path, bot agent, and log level are fixed by `wechat-wire` instead of exposed as public environment variables.
 
 ## Local Tests
 
@@ -78,7 +80,7 @@ bash scripts/build.sh
 ./tests/run.sh all
 ```
 
-The E2E suite uses `WECHAT_WIRE_FAKE=1`, so it does not require real WeChat credentials.
+The E2E suite uses `WECHAT_WIRE_FAKE=1`, so it does not require real WeChat credentials. The `WECHAT_WIRE_FAKE*` variables are localtest hooks, not public runtime configuration.
 
 You can also test the CLI loop directly without a real WeChat login:
 

@@ -37,7 +37,7 @@
 Commands:
 
 - `version` — build metadata.
-- `status` — config directory, base URL override, credential path, login state, known user count.
+- `status` — config directory, credential path, login state, known user count.
 - `login` — invokes the upstream QR login flow and persists SDK credentials.
 - `listen` — logs in, receives incoming messages through the SDK listener, prints them, and records users locally.
 - `msg send` — sends a text message to a locally observed user using the latest stored context token.

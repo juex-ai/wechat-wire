@@ -275,7 +275,6 @@ func (a *botInitAttempt) await(ctx context.Context) (bot.Client, error) {
 
 func (s *Server) botOptions() bot.Options {
 	return bot.Options{
-		BaseURL:  config.BaseURL(),
 		CredPath: config.CredentialPath(),
 		LogLevel: config.LogLevel(),
 		BotAgent: config.BotAgent(s.version),
@@ -292,10 +291,7 @@ func (s *Server) botOptions() bot.Options {
 			s.log("sdk error: %v", err)
 		},
 		OnVerifyCode: func(isRetry bool) (string, error) {
-			if code := os.Getenv("WECHAT_WIRE_VERIFY_CODE"); code != "" {
-				return code, nil
-			}
-			return "", fmt.Errorf("verification code required; set WECHAT_WIRE_VERIFY_CODE and restart")
+			return "", fmt.Errorf("verification code required; run wechat-wire login --force first")
 		},
 	}
 }
