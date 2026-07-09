@@ -12,6 +12,14 @@
               |
               v
 +----------------------------+
+| WeChat Session module      |
+| - User Book choreography   |
+| - context-backed sends     |
+| - bot adapter creation     |
++-------------+--------------+
+              |
+              v
++----------------------------+
 | bot.Client interface       |
 | - real SDK adapter         |
 | - fake localtest adapter   |
@@ -35,6 +43,12 @@ Commands:
 - `msg send` — sends a text message to a locally observed user using the latest stored context token.
 - `user list|show|forget` — manages the local user book.
 - `mcp` — starts a stdio MCP server.
+
+## WeChat Session Module
+
+The WeChat Session module is the seam shared by CLI and MCP callers. It owns the interface for recording incoming messages, listing/forgetting observed users, creating bot adapters, and sending text with the latest context token from the User Book.
+
+This keeps the context-token invariant in one implementation: callers do not know how `users.json` is shaped, when login must happen, or whether the concrete adapter is the real upstream SDK or fake localtest adapter.
 
 ## MCP
 

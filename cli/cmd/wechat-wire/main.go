@@ -19,6 +19,7 @@ import (
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
 	"github.com/juex-ai/wechat-wire/cli/internal/config"
 	"github.com/juex-ai/wechat-wire/cli/internal/mcp"
+	"github.com/juex-ai/wechat-wire/cli/internal/session"
 	"github.com/juex-ai/wechat-wire/cli/internal/status"
 	"github.com/juex-ai/wechat-wire/cli/internal/store"
 )
@@ -112,7 +113,8 @@ func loginCmd() *cobra.Command {
 			if err := validateFormat(format, "text", "json"); err != nil {
 				return err
 			}
-			client := bot.NewFromEnv(botOptions(cmd.ErrOrStderr(), verifyCode))
+			runtime := newSession(cmd.ErrOrStderr(), verifyCode)
+			client := runtime.NewClient()
 			creds, err := client.Login(cmd.Context(), force)
 			if err != nil {
 				return err
@@ -150,12 +152,13 @@ func listenCmd() *cobra.Command {
 				stop = cancel
 			}
 
-			client := bot.NewFromEnv(botOptions(cmd.ErrOrStderr(), verifyCode))
+			runtime := newSession(cmd.ErrOrStderr(), verifyCode)
+			client := runtime.NewClient()
 			if _, err := client.Login(ctx, false); err != nil {
 				return err
 			}
 			client.OnMessage(func(msg *bot.IncomingMessage) {
-				if err := store.RememberUser(config.UsersPath(), *msg); err != nil {
+				if err := runtime.RememberMessage(*msg); err != nil {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "remember user: %v\n", err)
 				}
 				printMessage(cmd.OutOrStdout(), format, msg)
@@ -212,32 +215,19 @@ func msgSendCmd() *cobra.Command {
 				return fmt.Errorf("--text is required")
 			}
 
-			user, ok, err := store.GetUser(config.UsersPath(), userID)
+			runtime := newSession(cmd.ErrOrStderr(), verifyCode)
+			result, err := runtime.SendText(cmd.Context(), userID, messageText)
+			if errors.Is(err, session.ErrUserNotObserved) {
+				return fmt.Errorf("user not found: %s; run wechat-wire listen first", userID)
+			}
+			if errors.Is(err, session.ErrContextMissing) {
+				return fmt.Errorf("no context_token for user %s; run wechat-wire listen to receive a fresh message first", userID)
+			}
 			if err != nil {
 				return err
 			}
-			if !ok {
-				return fmt.Errorf("user not found: %s; run wechat-wire listen first", userID)
-			}
-			if user.LastContextToken == "" {
-				return fmt.Errorf("no context_token for user %s; run wechat-wire listen to receive a fresh message first", userID)
-			}
-
-			client := bot.NewFromEnv(botOptions(cmd.ErrOrStderr(), verifyCode))
-			if _, err := client.Login(cmd.Context(), false); err != nil {
-				return err
-			}
-			if err := client.SendWithContext(cmd.Context(), userID, messageText, user.LastContextToken); err != nil {
-				return err
-			}
-
-			resp := map[string]any{
-				"sent":    true,
-				"user_id": userID,
-				"text":    messageText,
-			}
 			if format == "json" {
-				return writeJSON(cmd.OutOrStdout(), resp)
+				return writeJSON(cmd.OutOrStdout(), result)
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "ok: sent to %s\n", userID)
 			return err
@@ -268,7 +258,7 @@ func userListCmd() *cobra.Command {
 			if err := validateFormat(format, "table", "json"); err != nil {
 				return err
 			}
-			users, err := store.ListUsers(config.UsersPath())
+			users, err := newSession(io.Discard, "").ListUsers()
 			if err != nil {
 				return err
 			}
@@ -303,7 +293,7 @@ func userShowCmd() *cobra.Command {
 			if userID == "" {
 				return fmt.Errorf("--user_id is required")
 			}
-			user, ok, err := store.GetUser(config.UsersPath(), userID)
+			user, ok, err := newSession(io.Discard, "").GetUser(userID)
 			if err != nil {
 				return err
 			}
@@ -349,7 +339,7 @@ func userForgetCmd() *cobra.Command {
 			if userID == "" {
 				return fmt.Errorf("--user_id is required")
 			}
-			removed, err := store.ForgetUser(config.UsersPath(), userID)
+			removed, err := newSession(io.Discard, "").ForgetUser(userID)
 			if err != nil {
 				return err
 			}
@@ -377,6 +367,14 @@ func mcpCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&forceChannel, "channel", false, "Force claude/channel notifications even if the MCP client does not advertise the capability")
 	return cmd
+}
+
+func newSession(events io.Writer, verifyCode string) *session.Session {
+	return session.New(session.Config{
+		UsersPath:  config.UsersPath(),
+		Factory:    bot.NewFromEnv,
+		BotOptions: botOptions(events, verifyCode),
+	})
 }
 
 func botOptions(events io.Writer, verifyCode string) bot.Options {

@@ -15,17 +15,17 @@ import (
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
 	"github.com/juex-ai/wechat-wire/cli/internal/config"
+	"github.com/juex-ai/wechat-wire/cli/internal/session"
 	"github.com/juex-ai/wechat-wire/cli/internal/status"
-	"github.com/juex-ai/wechat-wire/cli/internal/store"
 )
 
 const channelCapabilityName = "claude/channel"
 
 // Server is the MCP stdio bridge for WeChat iLink Bot messages.
 type Server struct {
-	mcpServer *sdkmcp.Server
-	session   *sdkmcp.ServerSession
-	transport *channelTransport
+	mcpServer  *sdkmcp.Server
+	mcpSession *sdkmcp.ServerSession
+	transport  *channelTransport
 
 	version      string
 	forceChannel bool
@@ -36,6 +36,7 @@ type Server struct {
 	botClient    bot.Client
 	botStarted   bool
 	channelReady bool
+	runtime      *session.Session
 }
 
 // NewServer creates an MCP server.
@@ -93,7 +94,7 @@ func (s *Server) registerTools() {
 		Name:        "wechat_wire_list_users",
 		Description: "List locally observed WeChat users and their last message metadata.",
 	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args listUsersArgs) (*sdkmcp.CallToolResult, any, error) {
-		users, err := store.ListUsers(config.UsersPath())
+		users, err := s.getSessionModule().ListUsers()
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -122,20 +123,14 @@ func (s *Server) registerTools() {
 		if args.Text == "" {
 			return toolError(fmt.Errorf("text is required")), nil, nil
 		}
-		client, err := s.ensureBot(ctx)
+		if _, err := s.ensureBot(ctx); err != nil {
+			return toolError(err), nil, nil
+		}
+		result, err := s.getSessionModule().SendText(ctx, args.UserID, args.Text)
 		if err != nil {
 			return toolError(err), nil, nil
 		}
-		var contextToken string
-		if user, ok, err := store.GetUser(config.UsersPath(), args.UserID); err != nil {
-			return toolError(err), nil, nil
-		} else if ok {
-			contextToken = user.LastContextToken
-		}
-		if err := client.SendWithContext(ctx, args.UserID, args.Text, contextToken); err != nil {
-			return toolError(err), nil, nil
-		}
-		return toolText(fmt.Sprintf("ok: sent to %s", args.UserID)), nil, nil
+		return toolText(fmt.Sprintf("ok: sent to %s", result.UserID)), nil, nil
 	})
 
 	type typingArgs struct {
@@ -175,7 +170,7 @@ func (s *Server) registerTools() {
 		if args.UserID == "" {
 			return toolError(fmt.Errorf("user_id is required")), nil, nil
 		}
-		removed, err := store.ForgetUser(config.UsersPath(), args.UserID)
+		removed, err := s.getSessionModule().ForgetUser(args.UserID)
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -211,7 +206,16 @@ func (s *Server) ensureBot(ctx context.Context) (bot.Client, error) {
 	if baseCtx == nil {
 		baseCtx = ctx
 	}
-	client := s.factory(s.botOptions())
+	s.mu.Unlock()
+
+	client := s.getSessionModule().NewClient()
+
+	s.mu.Lock()
+	if s.botClient != nil {
+		existing := s.botClient
+		s.mu.Unlock()
+		return existing, nil
+	}
 	s.botClient = client
 	if s.botStarted {
 		s.mu.Unlock()
@@ -264,7 +268,7 @@ func (s *Server) handleMessage(msg *bot.IncomingMessage) {
 	if msg == nil {
 		return
 	}
-	if err := store.RememberUser(config.UsersPath(), *msg); err != nil {
+	if err := s.getSessionModule().RememberMessage(*msg); err != nil {
 		s.log("remember user: %v", err)
 	}
 	content := fmt.Sprintf("wechat-wire message from user_id=%s type=%s at %s\n%s",
@@ -275,13 +279,27 @@ func (s *Server) handleMessage(msg *bot.IncomingMessage) {
 func (s *Server) setSession(session *sdkmcp.ServerSession) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.session = session
+	s.mcpSession = session
+}
+
+func (s *Server) getSessionModule() *session.Session {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.runtime != nil {
+		return s.runtime
+	}
+	s.runtime = session.New(session.Config{
+		UsersPath:  config.UsersPath(),
+		Factory:    s.factory,
+		BotOptions: s.botOptions(),
+	})
+	return s.runtime
 }
 
 func (s *Server) getSession() *sdkmcp.ServerSession {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.session
+	return s.mcpSession
 }
 
 func (s *Server) setChannelReady(ready bool) {
