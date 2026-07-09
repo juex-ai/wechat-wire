@@ -48,6 +48,43 @@ func TestSessionRecordsIncomingMessageAndSendsWithStoredContext(t *testing.T) {
 	}
 }
 
+func TestSessionSendTextCanReuseExistingClient(t *testing.T) {
+	dir := t.TempDir()
+	existingClient := &recordingClient{}
+	s := New(Config{
+		UsersPath: filepath.Join(dir, "users.json"),
+		Factory: func(opts bot.Options) bot.Client {
+			t.Fatal("factory should not be called when a client is supplied")
+			return nil
+		},
+	})
+
+	msg := bot.IncomingMessage{
+		UserID:       "user-1",
+		Text:         "hello",
+		Type:         "text",
+		Timestamp:    time.Unix(100, 0),
+		ContextToken: "ctx-1",
+	}
+	if err := s.RememberMessage(msg); err != nil {
+		t.Fatalf("RememberMessage: %v", err)
+	}
+
+	result, err := s.SendText(context.Background(), "user-1", "reply", WithClient(existingClient))
+	if err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	if !result.Sent || result.UserID != "user-1" || result.Text != "reply" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if existingClient.loginCalls != 0 {
+		t.Fatalf("login calls: got %d want 0", existingClient.loginCalls)
+	}
+	if existingClient.sentUserID != "user-1" || existingClient.sentText != "reply" || existingClient.sentContextToken != "ctx-1" {
+		t.Fatalf("send args: user=%q text=%q context=%q", existingClient.sentUserID, existingClient.sentText, existingClient.sentContextToken)
+	}
+}
+
 func TestSessionSendTextRequiresObservedContext(t *testing.T) {
 	s := New(Config{
 		UsersPath: filepath.Join(t.TempDir(), "users.json"),
