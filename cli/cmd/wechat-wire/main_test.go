@@ -38,7 +38,6 @@ func TestVersionJSON(t *testing.T) {
 func TestStatusShowsRuntimeConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("WECHAT_WIRE_DIR", dir)
-	t.Setenv("WECHAT_WIRE_BASE_URL", "https://ilink.example")
 
 	stdout, _, err := runArgs("status")
 	if err != nil {
@@ -48,7 +47,6 @@ func TestStatusShowsRuntimeConfig(t *testing.T) {
 		"version:",
 		"work_dir(env):",
 		filepath.Join(dir, ".config", "wechat-wire"),
-		"base_url:          https://ilink.example",
 		"credentials:",
 		"users:",
 	} {

@@ -15,7 +15,7 @@ For product overview and quick start, see `README.md`. For architecture internal
 
 - Use the upstream MIT SDK `github.com/corespeed-io/wechatbot/golang` for iLink Bot protocol behavior. Do not reimplement raw iLink HTTP/auth/crypto unless the SDK API is insufficient and the tradeoff is documented first.
 - CLI config uses `--homedir`, then `WECHAT_WIRE_DIR`, then the current home directory. The final directory is normalized to `.config/wechat-wire`.
-- SDK credentials live at `WECHAT_WIRE_CRED_PATH` or `<config-dir>/credentials.json`.
+- SDK credentials live at `<config-dir>/credentials.json`. Do not add SDK-level environment variables unless there is a product requirement for the user-facing configuration.
 - The local user book lives at `<config-dir>/users.json`; it stores observed user IDs, last-message metadata, and the latest context token used by `msg send`. Treat it as private local runtime state.
 - The WeChat Session module in `cli/internal/session` owns User Book choreography, bot adapter creation, remembered message handling, and context-backed sends. CLI and MCP callers should use that seam instead of reimplementing context-token lookup.
 - Build metadata is injected with `-ldflags` into `main.version` and `main.commit`.

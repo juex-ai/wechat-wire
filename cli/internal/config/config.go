@@ -1,4 +1,4 @@
-// Package config resolves environment-based configuration for the CLI.
+// Package config resolves runtime configuration for the CLI.
 package config
 
 import (
@@ -85,27 +85,8 @@ func DirSource() string {
 	return "default"
 }
 
-// BaseURL returns an optional iLink base URL override. Empty means SDK default.
-func BaseURL() string {
-	return os.Getenv("WECHAT_WIRE_BASE_URL")
-}
-
-// DisplayBaseURL returns the status string for the active base URL.
-func DisplayBaseURL() string {
-	if v := BaseURL(); v != "" {
-		return v
-	}
-	return "(sdk default)"
-}
-
 // CredentialPath returns the SDK credential file path.
 func CredentialPath() string {
-	if v := os.Getenv("WECHAT_WIRE_CRED_PATH"); v != "" {
-		if abs, err := absolutePath(v); err == nil {
-			return abs
-		}
-		return filepath.Clean(v)
-	}
 	return filepath.Join(Dir(), "credentials.json")
 }
 
@@ -114,19 +95,13 @@ func UsersPath() string {
 	return filepath.Join(Dir(), "users.json")
 }
 
-// LogLevel returns the SDK log level.
+// LogLevel returns the fixed SDK log level.
 func LogLevel() string {
-	if v := os.Getenv("WECHAT_WIRE_LOG_LEVEL"); v != "" {
-		return v
-	}
 	return "info"
 }
 
 // BotAgent returns the SDK bot_agent identity.
 func BotAgent(version string) string {
-	if v := os.Getenv("WECHAT_WIRE_BOT_AGENT"); v != "" {
-		return v
-	}
 	if version == "" {
 		version = "dev"
 	}
