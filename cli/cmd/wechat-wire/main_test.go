@@ -100,4 +100,34 @@ func TestListenOnceFakeRecordsUser(t *testing.T) {
 	if !strings.Contains(users, `"user_id":"user-1"`) {
 		t.Fatalf("user list missing recorded user:\n%s", users)
 	}
+	if strings.Contains(users, "ctx-1") || strings.Contains(users, "context_token") {
+		t.Fatalf("user list should not expose context token:\n%s", users)
+	}
+}
+
+func TestMsgSendFakeUsesRecordedUserContext(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WECHAT_WIRE_DIR", dir)
+	t.Setenv("WECHAT_WIRE_FAKE", "1")
+	t.Setenv("WECHAT_WIRE_FAKE_MESSAGES_JSON", `[{"user_id":"user-1","text":"hello from fake","type":"text","context_token":"ctx-1"}]`)
+
+	if _, _, err := runArgs("listen", "--once", "--format", "json"); err != nil {
+		t.Fatalf("listen fake once: %v", err)
+	}
+
+	stdout, _, err := runArgs("msg", "send", "--user_id", "user-1", "--text", "reply from cli", "--format", "json")
+	if err != nil {
+		t.Fatalf("msg send fake: %v", err)
+	}
+	var got struct {
+		Sent   bool   `json:"sent"`
+		UserID string `json:"user_id"`
+		Text   string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("msg send JSON: %v\n%s", err, stdout)
+	}
+	if !got.Sent || got.UserID != "user-1" || got.Text != "reply from cli" {
+		t.Fatalf("unexpected msg send response: %+v", got)
+	}
 }

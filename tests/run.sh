@@ -6,11 +6,12 @@ cd "$REPO_ROOT"
 
 usage() {
     cat <<'EOF'
-usage: ./tests/run.sh [--skip-build] [mcp|all]
+usage: ./tests/run.sh [--skip-build] [cli|mcp|all]
 
 Runs wechat-wire end-to-end tests with the fake bot backend.
 
 Suites:
+  cli   CLI listen/send flow with fake incoming WeChat messages
   mcp   MCP stdio flow with fake incoming WeChat messages
   all   all suites (default)
 
@@ -27,7 +28,7 @@ while [[ $# -gt 0 ]]; do
         --skip-build)
             skip_build=true
             ;;
-        mcp|all)
+        cli|mcp|all)
             suites+=("$1")
             ;;
         -h|--help)
@@ -54,7 +55,13 @@ fi
 packages=()
 for suite in "${suites[@]}"; do
     case "$suite" in
-        all|mcp)
+        all)
+            packages+=("./cli" "./mcp")
+            ;;
+        cli)
+            packages+=("./cli")
+            ;;
+        mcp)
             packages+=("./mcp")
             ;;
     esac

@@ -15,6 +15,7 @@ After completing any code change, build the binary, run affected unit tests, and
 2. **Run unit tests** — `( cd cli && go test -v ./... )`
 3. **Run E2E tests** — `./tests/run.sh all`
    - Uses `WECHAT_WIRE_FAKE=1`
+   - Verifies direct CLI `listen --once` plus `msg send`
    - Starts `bin/wechat-wire mcp`
    - Verifies incoming fake messages become MCP notifications
    - Verifies MCP tools can list users and send a fake reply
@@ -24,4 +25,3 @@ After completing any code change, build the binary, run affected unit tests, and
 - If build fails, fix compilation errors first.
 - If unit tests fail, fix them before running E2E.
 - If E2E fails, inspect test logs, fix the MCP or fake backend path, rerun the failing suite, then rerun `./tests/run.sh all`.
-

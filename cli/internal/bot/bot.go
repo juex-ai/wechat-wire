@@ -50,6 +50,7 @@ type Client interface {
 	OnMessage(handler func(*IncomingMessage))
 	Run(ctx context.Context) error
 	Send(ctx context.Context, userID, text string) error
+	SendWithContext(ctx context.Context, userID, text, contextToken string) error
 	SendTyping(ctx context.Context, userID string) error
 	StopTyping(ctx context.Context, userID string) error
 	Stop()
@@ -119,6 +120,13 @@ func (c *sdkClient) Run(ctx context.Context) error {
 
 func (c *sdkClient) Send(ctx context.Context, userID, text string) error {
 	return c.bot.Send(ctx, userID, text)
+}
+
+func (c *sdkClient) SendWithContext(ctx context.Context, userID, text, contextToken string) error {
+	if contextToken == "" {
+		return c.Send(ctx, userID, text)
+	}
+	return c.bot.Reply(ctx, &wechatbot.IncomingMessage{UserID: userID, ContextToken: contextToken}, text)
 }
 
 func (c *sdkClient) SendTyping(ctx context.Context, userID string) error {
@@ -201,6 +209,14 @@ func (c *fakeClient) Send(ctx context.Context, userID, text string) error {
 		return fmt.Errorf("text is required")
 	}
 	return nil
+}
+
+func (c *fakeClient) SendWithContext(ctx context.Context, userID, text, contextToken string) error {
+	_ = ctx
+	if contextToken == "" {
+		return fmt.Errorf("no context_token for user %s", userID)
+	}
+	return c.Send(context.Background(), userID, text)
 }
 
 func (c *fakeClient) SendTyping(ctx context.Context, userID string) error {

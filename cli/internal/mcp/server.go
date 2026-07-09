@@ -126,7 +126,13 @@ func (s *Server) registerTools() {
 		if err != nil {
 			return toolError(err), nil, nil
 		}
-		if err := client.Send(ctx, args.UserID, args.Text); err != nil {
+		var contextToken string
+		if user, ok, err := store.GetUser(config.UsersPath(), args.UserID); err != nil {
+			return toolError(err), nil, nil
+		} else if ok {
+			contextToken = user.LastContextToken
+		}
+		if err := client.SendWithContext(ctx, args.UserID, args.Text, contextToken); err != nil {
 			return toolError(err), nil, nil
 		}
 		return toolText(fmt.Sprintf("ok: sent to %s", args.UserID)), nil, nil

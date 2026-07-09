@@ -22,6 +22,7 @@ wechat-wire user list
 
 # Listen for messages and record users
 wechat-wire listen
+wechat-wire msg send --user_id <wechat-user-id> --text "hi"
 
 # Run the MCP server
 wechat-wire mcp
@@ -35,6 +36,8 @@ wechat-wire version --format json
 wechat-wire status --format json
 wechat-wire login --force
 wechat-wire listen --once --format json
+wechat-wire msg send --user_id <wechat-user-id> --text "hello"
+wechat-wire msg send --user_id <wechat-user-id> --content "hello" --format json
 wechat-wire user list --format json
 wechat-wire user show --user_id <wechat-user-id>
 wechat-wire user forget --user_id <wechat-user-id>
@@ -52,6 +55,7 @@ wechat-wire mcp --channel
 Incoming WeChat messages are delivered as `notifications/claude/channel` notifications when the MCP client advertises experimental `claude/channel` support, or when the server is started with `--channel`.
 
 The upstream SDK requires a current `context_token` before sending to a user. The long-lived MCP process obtains that context after it receives a message from the user.
+For direct CLI sends, `wechat-wire listen` records the latest context token for each observed user in the local config directory; `wechat-wire msg send` uses that stored context to send through the upstream SDK.
 
 ## Configuration
 
@@ -74,7 +78,19 @@ bash scripts/build.sh
 
 The E2E suite uses `WECHAT_WIRE_FAKE=1`, so it does not require real WeChat credentials.
 
+You can also test the CLI loop directly without a real WeChat login:
+
+```bash
+tmpdir=$(mktemp -d)
+
+WECHAT_WIRE_FAKE=1 \
+WECHAT_WIRE_FAKE_MESSAGES_JSON='[{"user_id":"u1","text":"hello cli","type":"text","context_token":"ctx"}]' \
+./bin/wechat-wire --homedir "$tmpdir" listen --once --format json
+
+WECHAT_WIRE_FAKE=1 \
+./bin/wechat-wire --homedir "$tmpdir" msg send --user_id u1 --text "reply" --format json
+```
+
 ## Upstream SDK
 
 The core iLink Bot protocol is provided by `github.com/corespeed-io/wechatbot/golang` under the MIT license. `wechat-wire` depends on that package directly and keeps protocol/auth/crypto behavior there.
-

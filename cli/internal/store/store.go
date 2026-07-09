@@ -58,12 +58,13 @@ func ReadCredentials(path string) (*CredentialsInfo, error) {
 
 // UserRecord is one known WeChat user observed through the bot stream.
 type UserRecord struct {
-	UserID       string `json:"user_id"`
-	LastText     string `json:"last_text"`
-	LastType     string `json:"last_type"`
-	LastSeenAt   int64  `json:"last_seen_at"`
-	MessageCount int    `json:"message_count"`
-	HasContext   bool   `json:"has_context"`
+	UserID           string `json:"user_id"`
+	LastText         string `json:"last_text"`
+	LastType         string `json:"last_type"`
+	LastSeenAt       int64  `json:"last_seen_at"`
+	MessageCount     int    `json:"message_count"`
+	HasContext       bool   `json:"has_context"`
+	LastContextToken string `json:"context_token,omitempty"`
 }
 
 // UserBook is the on-disk user index.
@@ -130,7 +131,10 @@ func RememberUser(path string, msg bot.IncomingMessage) error {
 	record.LastType = msgType
 	record.LastSeenAt = ts.Unix()
 	record.MessageCount++
-	record.HasContext = record.HasContext || msg.ContextToken != ""
+	if msg.ContextToken != "" {
+		record.HasContext = true
+		record.LastContextToken = msg.ContextToken
+	}
 	book.Users[msg.UserID] = record
 	return WriteUserBook(path, book)
 }

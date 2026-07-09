@@ -54,6 +54,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(statusCmd())
 	root.AddCommand(loginCmd())
 	root.AddCommand(listenCmd())
+	root.AddCommand(msgCmd())
 	root.AddCommand(userCmd())
 	root.AddCommand(mcpCmd())
 
@@ -177,6 +178,79 @@ func listenCmd() *cobra.Command {
 	return cmd
 }
 
+func msgCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "msg",
+		Short: "Send messages to observed WeChat users",
+	}
+	cmd.AddCommand(msgSendCmd())
+	return cmd
+}
+
+func msgSendCmd() *cobra.Command {
+	var userID string
+	var text string
+	var content string
+	var format string
+	var verifyCode string
+
+	cmd := &cobra.Command{
+		Use:   "send",
+		Short: "Send a text message to a locally observed WeChat user",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormat(format, "text", "json"); err != nil {
+				return err
+			}
+			if userID == "" {
+				return fmt.Errorf("--user_id is required")
+			}
+			messageText := text
+			if messageText == "" {
+				messageText = content
+			}
+			if messageText == "" {
+				return fmt.Errorf("--text is required")
+			}
+
+			user, ok, err := store.GetUser(config.UsersPath(), userID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return fmt.Errorf("user not found: %s; run wechat-wire listen first", userID)
+			}
+			if user.LastContextToken == "" {
+				return fmt.Errorf("no context_token for user %s; run wechat-wire listen to receive a fresh message first", userID)
+			}
+
+			client := bot.NewFromEnv(botOptions(cmd.ErrOrStderr(), verifyCode))
+			if _, err := client.Login(cmd.Context(), false); err != nil {
+				return err
+			}
+			if err := client.SendWithContext(cmd.Context(), userID, messageText, user.LastContextToken); err != nil {
+				return err
+			}
+
+			resp := map[string]any{
+				"sent":    true,
+				"user_id": userID,
+				"text":    messageText,
+			}
+			if format == "json" {
+				return writeJSON(cmd.OutOrStdout(), resp)
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "ok: sent to %s\n", userID)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&userID, "user_id", "", "WeChat user ID observed from incoming messages (required)")
+	cmd.Flags().StringVar(&text, "text", "", "Text message to send (required)")
+	cmd.Flags().StringVar(&content, "content", "", "Alias for --text")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text|json")
+	cmd.Flags().StringVar(&verifyCode, "verify-code", "", "Pairing code for non-interactive login when WeChat requests one")
+	return cmd
+}
+
 func userCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "user", Short: "View and manage locally observed WeChat users"}
 	cmd.AddCommand(userListCmd())
@@ -199,7 +273,7 @@ func userListCmd() *cobra.Command {
 				return err
 			}
 			if format == "json" {
-				return writeJSON(cmd.OutOrStdout(), map[string]any{"users": users})
+				return writeJSON(cmd.OutOrStdout(), map[string]any{"users": publicUserRecords(users)})
 			}
 			if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%-32s  %-19s  %-8s  %s\n", "USER_ID", "LAST_SEEN", "MESSAGES", "LAST_TEXT"); err != nil {
 				return err
@@ -237,7 +311,7 @@ func userShowCmd() *cobra.Command {
 				return fmt.Errorf("user not found: %s", userID)
 			}
 			if format == "json" {
-				return writeJSON(cmd.OutOrStdout(), user)
+				return writeJSON(cmd.OutOrStdout(), publicUserRecord(*user))
 			}
 			out := cmd.OutOrStdout()
 			if _, err := fmt.Fprintf(out, "user_id:       %s\n", user.UserID); err != nil {
@@ -353,6 +427,34 @@ func printMessage(out io.Writer, format string, msg *bot.IncomingMessage) {
 		return
 	}
 	_, _ = fmt.Fprintf(out, "[%s] %s %s: %s\n", msg.Timestamp.Local().Format("2006-01-02 15:04:05"), msg.UserID, msg.Type, msg.Text)
+}
+
+type userRecordOutput struct {
+	UserID       string `json:"user_id"`
+	LastText     string `json:"last_text"`
+	LastType     string `json:"last_type"`
+	LastSeenAt   int64  `json:"last_seen_at"`
+	MessageCount int    `json:"message_count"`
+	HasContext   bool   `json:"has_context"`
+}
+
+func publicUserRecords(users []store.UserRecord) []userRecordOutput {
+	out := make([]userRecordOutput, 0, len(users))
+	for _, user := range users {
+		out = append(out, publicUserRecord(user))
+	}
+	return out
+}
+
+func publicUserRecord(user store.UserRecord) userRecordOutput {
+	return userRecordOutput{
+		UserID:       user.UserID,
+		LastText:     user.LastText,
+		LastType:     user.LastType,
+		LastSeenAt:   user.LastSeenAt,
+		MessageCount: user.MessageCount,
+		HasContext:   user.HasContext,
+	}
 }
 
 func formatUnix(sec int64) string {

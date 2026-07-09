@@ -44,6 +44,9 @@ func TestRememberUserCreatesAndUpdatesUserBook(t *testing.T) {
 	if user.LastText != "second" || user.LastType != "image" || user.MessageCount != 2 || user.LastSeenAt != 200 {
 		t.Fatalf("unexpected user record: %+v", user)
 	}
+	if user.LastContextToken != "ctx-2" {
+		t.Fatalf("context token: got %q want %q", user.LastContextToken, "ctx-2")
+	}
 	if !user.HasContext {
 		t.Fatalf("expected HasContext=true")
 	}
