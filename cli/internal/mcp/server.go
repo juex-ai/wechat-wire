@@ -197,9 +197,15 @@ func (s *Server) onInitialized(ctx context.Context, req *sdkmcp.InitializedReque
 		return
 	}
 	s.log("starting WeChat listener")
-	if _, err := s.ensureBot(ctx); err != nil {
-		s.sendChannelNotification(fmt.Sprintf("wechat-wire listener failed: %v", err), "error", "", "")
-	}
+	s.startBot(ctx)
+}
+
+func (s *Server) startBot(ctx context.Context) {
+	go func() {
+		if _, err := s.ensureBot(ctx); err != nil && ctx.Err() == nil {
+			s.sendChannelNotification(fmt.Sprintf("wechat-wire listener failed: %v", err), "error", "", "")
+		}
+	}()
 }
 
 func (s *Server) ensureBot(ctx context.Context) (bot.Client, error) {

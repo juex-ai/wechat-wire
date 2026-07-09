@@ -138,6 +138,40 @@ func TestEnsureBotWaiterCanCancelDuringSharedLogin(t *testing.T) {
 	waitForRunCall(t, client, 1)
 }
 
+func TestOnInitializedDoesNotBlockOnLogin(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_DIR", t.TempDir())
+
+	client := newBlockingClient()
+	server := NewServer("test", true, func(opts bot.Options) bot.Client {
+		return client
+	})
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	server.mu.Lock()
+	server.runCtx = runCtx
+	server.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		server.onInitialized(context.Background(), &sdkmcp.InitializedRequest{})
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("onInitialized blocked while bot login was in progress")
+	}
+	select {
+	case <-client.loginStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background login did not start")
+	}
+	close(client.releaseLogin)
+	waitForRunCall(t, client, 1)
+}
+
 func TestBotOptionsNotifyLoginQRCode(t *testing.T) {
 	conn := &captureConnection{}
 	server := NewServer("test", true, func(opts bot.Options) bot.Client {
