@@ -34,9 +34,15 @@ type Server struct {
 	mu           sync.Mutex
 	runCtx       context.Context
 	botClient    bot.Client
-	botStarted   bool
+	botInit      *botInitAttempt
 	channelReady bool
 	runtime      *session.Session
+}
+
+type botInitAttempt struct {
+	done   chan struct{}
+	client bot.Client
+	err    error
 }
 
 // NewServer creates an MCP server.
@@ -123,10 +129,11 @@ func (s *Server) registerTools() {
 		if args.Text == "" {
 			return toolError(fmt.Errorf("text is required")), nil, nil
 		}
-		if _, err := s.ensureBot(ctx); err != nil {
+		client, err := s.ensureBot(ctx)
+		if err != nil {
 			return toolError(err), nil, nil
 		}
-		result, err := s.getSessionModule().SendText(ctx, args.UserID, args.Text)
+		result, err := s.getSessionModule().SendText(ctx, args.UserID, args.Text, session.WithClient(client))
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -196,37 +203,42 @@ func (s *Server) onInitialized(ctx context.Context, req *sdkmcp.InitializedReque
 }
 
 func (s *Server) ensureBot(ctx context.Context) (bot.Client, error) {
-	s.mu.Lock()
-	if s.botClient != nil {
-		client := s.botClient
-		s.mu.Unlock()
+	client, attempt, baseCtx, owner := s.claimBotInit(ctx)
+	if client != nil {
 		return client, nil
+	}
+	if !owner {
+		return attempt.await(ctx)
+	}
+
+	s.initializeBot(baseCtx, attempt)
+	return attempt.await(ctx)
+}
+
+func (s *Server) claimBotInit(ctx context.Context) (bot.Client, *botInitAttempt, context.Context, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.botClient != nil {
+		return s.botClient, nil, nil, false
+	}
+	if s.botInit != nil {
+		return nil, s.botInit, nil, false
 	}
 	baseCtx := s.runCtx
 	if baseCtx == nil {
 		baseCtx = ctx
 	}
-	s.mu.Unlock()
+	attempt := &botInitAttempt{done: make(chan struct{})}
+	s.botInit = attempt
+	return nil, attempt, baseCtx, true
+}
 
+func (s *Server) initializeBot(baseCtx context.Context, attempt *botInitAttempt) {
 	client := s.getSessionModule().NewClient()
-
-	s.mu.Lock()
-	if s.botClient != nil {
-		existing := s.botClient
-		s.mu.Unlock()
-		return existing, nil
-	}
-	s.botClient = client
-	if s.botStarted {
-		s.mu.Unlock()
-		return client, nil
-	}
-	s.botStarted = true
-	s.mu.Unlock()
-
 	client.OnMessage(s.handleMessage)
 	if _, err := client.Login(baseCtx, false); err != nil {
-		return nil, err
+		s.finishBotInit(attempt, nil, err)
+		return
 	}
 	go func() {
 		if err := client.Run(baseCtx); err != nil && baseCtx.Err() == nil {
@@ -234,7 +246,31 @@ func (s *Server) ensureBot(ctx context.Context) (bot.Client, error) {
 			s.sendChannelNotification(fmt.Sprintf("wechat-wire listener exited: %v", err), "error", "", "")
 		}
 	}()
-	return client, nil
+	s.finishBotInit(attempt, client, nil)
+}
+
+func (s *Server) finishBotInit(attempt *botInitAttempt, client bot.Client, err error) {
+	s.mu.Lock()
+	if err == nil {
+		s.botClient = client
+	}
+	if s.botInit == attempt {
+		s.botInit = nil
+	}
+	s.mu.Unlock()
+
+	attempt.client = client
+	attempt.err = err
+	close(attempt.done)
+}
+
+func (a *botInitAttempt) await(ctx context.Context) (bot.Client, error) {
+	select {
+	case <-a.done:
+		return a.client, a.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 func (s *Server) botOptions() bot.Options {

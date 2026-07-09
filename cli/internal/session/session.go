@@ -31,6 +31,13 @@ type Session struct {
 	botOptions bot.Options
 }
 
+// SendOption adjusts one text send.
+type SendOption func(*sendConfig)
+
+type sendConfig struct {
+	client bot.Client
+}
+
 // SendResult is returned after a text send completes.
 type SendResult struct {
 	Sent   bool   `json:"sent"`
@@ -61,8 +68,15 @@ func (s *Session) RememberMessage(msg bot.IncomingMessage) error {
 	return store.RememberUser(s.usersPath, msg)
 }
 
+// WithClient reuses an already logged-in bot client for this send.
+func WithClient(client bot.Client) SendOption {
+	return func(config *sendConfig) {
+		config.client = client
+	}
+}
+
 // SendText sends a text reply to a previously observed user.
-func (s *Session) SendText(ctx context.Context, userID, text string) (*SendResult, error) {
+func (s *Session) SendText(ctx context.Context, userID, text string, options ...SendOption) (*SendResult, error) {
 	if userID == "" {
 		return nil, fmt.Errorf("user_id is required")
 	}
@@ -81,9 +95,19 @@ func (s *Session) SendText(ctx context.Context, userID, text string) (*SendResul
 		return nil, ErrContextMissing
 	}
 
-	client := s.NewClient()
-	if _, err := client.Login(ctx, false); err != nil {
-		return nil, err
+	sendConfig := sendConfig{}
+	for _, option := range options {
+		if option != nil {
+			option(&sendConfig)
+		}
+	}
+
+	client := sendConfig.client
+	if client == nil {
+		client = s.NewClient()
+		if _, err := client.Login(ctx, false); err != nil {
+			return nil, err
+		}
 	}
 	if err := client.SendWithContext(ctx, userID, text, user.LastContextToken); err != nil {
 		return nil, err
