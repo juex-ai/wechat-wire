@@ -280,12 +280,18 @@ func (s *Server) botOptions() bot.Options {
 		BotAgent: config.BotAgent(s.version),
 		OnQRURL: func(url string) {
 			s.log("scan QR URL: %s", url)
+			s.sendLoginNotification(
+				fmt.Sprintf("wechat-wire login required. Scan this QR URL with WeChat to continue:\n%s", url),
+				"login_required",
+			)
 		},
 		OnScanned: func() {
 			s.log("QR scanned")
+			s.sendLoginNotification("wechat-wire login QR code scanned. Confirm the login in WeChat to continue.", "login_scanned")
 		},
 		OnExpired: func() {
 			s.log("QR expired")
+			s.sendLoginNotification("wechat-wire login QR code expired. Restart the MCP server to request a new QR URL.", "login_expired")
 		},
 		OnError: func(err error) {
 			s.log("sdk error: %v", err)
@@ -294,6 +300,10 @@ func (s *Server) botOptions() bot.Options {
 			return "", fmt.Errorf("verification code required; run wechat-wire login --force first")
 		},
 	}
+}
+
+func (s *Server) sendLoginNotification(content, eventType string) {
+	s.sendChannelNotification(content, eventType, "", "login")
 }
 
 func (s *Server) handleMessage(msg *bot.IncomingMessage) {

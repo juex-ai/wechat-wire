@@ -2,12 +2,17 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
 )
@@ -133,6 +138,40 @@ func TestEnsureBotWaiterCanCancelDuringSharedLogin(t *testing.T) {
 	waitForRunCall(t, client, 1)
 }
 
+func TestBotOptionsNotifyLoginQRCode(t *testing.T) {
+	conn := &captureConnection{}
+	server := NewServer("test", true, func(opts bot.Options) bot.Client {
+		t.Fatal("factory should not be called")
+		return nil
+	})
+	server.transport = &channelTransport{
+		conn: &channelConnection{inner: conn, writeMu: &sync.Mutex{}},
+	}
+	server.mcpSession = &sdkmcp.ServerSession{}
+	server.channelReady = true
+
+	qrURL := "https://wechat.example/qr/login-token"
+	server.botOptions().OnQRURL(qrURL)
+
+	req := conn.onlyRequest(t)
+	if req.Method != "notifications/claude/channel" {
+		t.Fatalf("method: got %q want notifications/claude/channel", req.Method)
+	}
+	var params channelNotification
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if !stringsContainsAll(params.Content, "login required", qrURL) {
+		t.Fatalf("content did not include login prompt and QR URL: %q", params.Content)
+	}
+	if params.Meta.EventType != "login_required" {
+		t.Fatalf("event_type: got %q want login_required", params.Meta.EventType)
+	}
+	if params.Meta.MessageType != "login" {
+		t.Fatalf("message_type: got %q want login", params.Meta.MessageType)
+	}
+}
+
 func waitForRunCall(t *testing.T, client *blockingClient, want int32) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
@@ -146,6 +185,15 @@ func waitForRunCall(t *testing.T, client *blockingClient, want int32) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+func stringsContainsAll(s string, values ...string) bool {
+	for _, value := range values {
+		if !strings.Contains(s, value) {
+			return false
+		}
+	}
+	return true
 }
 
 type blockingClient struct {
@@ -199,3 +247,38 @@ func (c *blockingClient) StopTyping(ctx context.Context, userID string) error {
 }
 
 func (c *blockingClient) Stop() {}
+
+type captureConnection struct {
+	mu     sync.Mutex
+	writes []jsonrpc.Message
+}
+
+func (c *captureConnection) Read(ctx context.Context) (jsonrpc.Message, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (c *captureConnection) Write(ctx context.Context, msg jsonrpc.Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writes = append(c.writes, msg)
+	return nil
+}
+
+func (c *captureConnection) Close() error { return nil }
+
+func (c *captureConnection) SessionID() string { return "test-session" }
+
+func (c *captureConnection) onlyRequest(t *testing.T) *jsonrpc.Request {
+	t.Helper()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.writes) != 1 {
+		t.Fatalf("writes: got %d want 1", len(c.writes))
+	}
+	req, ok := c.writes[0].(*jsonrpc.Request)
+	if !ok {
+		t.Fatalf("write type: got %T want *jsonrpc.Request", c.writes[0])
+	}
+	return req
+}
