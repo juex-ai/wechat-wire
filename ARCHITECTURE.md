@@ -14,7 +14,7 @@
 +----------------------------+
 | WeChat Session module      |
 | - User Book choreography   |
-| - context-backed sends     |
+| - text/attachment sends    |
 | - inbound media handling   |
 | - bot adapter creation     |
 +-------------+--------------+
@@ -41,17 +41,19 @@ Commands:
 - `status` — config directory, credential path, login state, known user count.
 - `login` — invokes the upstream QR login flow and persists SDK credentials.
 - `listen` — logs in, receives incoming messages through the SDK listener, prints them, and records users locally.
-- `msg send` — sends a text message to a locally observed user using the latest stored context token.
+- `msg send` — sends text or one local attachment to a locally observed user using the latest stored context token.
 - `user list|show|forget` — manages the local user book.
 - `mcp` — starts a stdio MCP server.
 
 ## WeChat Session Module
 
-The WeChat Session module is the seam shared by CLI and MCP callers. It owns the interface for recording incoming messages, downloading inbound media, listing/forgetting observed users, creating bot adapters, and sending text with the latest context token from the User Book.
+The WeChat Session module is the seam shared by CLI and MCP callers. It owns the interface for recording incoming messages, downloading inbound media, listing/forgetting observed users, creating bot adapters, and sending text or local attachments with the latest context token from the User Book.
 
 This keeps the context-token invariant in one implementation: callers do not know how `users.json` is shaped, when login must happen, or whether the concrete adapter is the real upstream SDK or fake localtest adapter.
 
 The bot adapter retains the upstream parsed message only long enough to call the SDK's `Download` method. `cli/internal/media` then persists decrypted bytes under the active config directory with private permissions and sanitized filenames. Protocol download, CDN crypto, and media parsing remain owned by the upstream SDK.
+
+For outbound attachments, the Session module resolves and validates one readable regular file, enforces a 100 MiB memory-safety limit, and passes its bytes plus a base filename to the bot adapter. The adapter sends an optional caption as a separate SDK text reply because iLink media requests accept one item per `item_list`, then calls the upstream SDK's `ReplyContent` and `SendFile` for the file. The SDK routes known image and video extensions to native WeChat media messages and sends other extensions as files.
 
 ## MCP
 
@@ -62,10 +64,11 @@ Tools:
 - `wechat_wire_status`
 - `wechat_wire_list_users`
 - `wechat_wire_send_message`
+- `wechat_wire_send_attachment`
 - `wechat_wire_send_typing`
 - `wechat_wire_forget_user`
 
-The upstream SDK only allows proactive sends after it has a `context_token` for the target user. `wechat-wire` records the latest context token from incoming messages. CLI `msg send` uses the stored token through the SDK `Reply` path; MCP sends first use the active SDK process and can also fall back to the stored token.
+The upstream SDK only allows proactive sends after it has a `context_token` for the target user. `wechat-wire` records the latest context token from incoming messages. CLI `msg send` uses the stored token through the SDK reply paths; MCP sends reuse the active SDK process and the stored token.
 
 ## Storage
 

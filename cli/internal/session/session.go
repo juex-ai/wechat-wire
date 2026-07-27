@@ -5,12 +5,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
 	"github.com/juex-ai/wechat-wire/cli/internal/media"
 	"github.com/juex-ai/wechat-wire/cli/internal/store"
 )
+
+const maxOutboundAttachmentBytes = 100 << 20
 
 var (
 	// ErrUserNotObserved means the User Book has no record for the requested user.
@@ -47,6 +52,23 @@ type SendResult struct {
 	Sent   bool   `json:"sent"`
 	UserID string `json:"user_id"`
 	Text   string `json:"text"`
+}
+
+// Attachment describes one local file to send.
+type Attachment struct {
+	Path     string
+	FileName string
+	Caption  string
+}
+
+// AttachmentResult is returned after an attachment send completes.
+type AttachmentResult struct {
+	Sent      bool   `json:"sent"`
+	UserID    string `json:"user_id"`
+	Path      string `json:"path"`
+	FileName  string `json:"file_name"`
+	SizeBytes int64  `json:"size_bytes"`
+	Caption   string `json:"caption,omitempty"`
 }
 
 // New creates a WeChat Session.
@@ -137,6 +159,110 @@ func (s *Session) SendText(ctx context.Context, userID, text string, options ...
 		return nil, err
 	}
 	return &SendResult{Sent: true, UserID: userID, Text: text}, nil
+}
+
+// SendAttachment uploads and sends a local file to a previously observed user.
+func (s *Session) SendAttachment(ctx context.Context, userID string, attachment Attachment, options ...SendOption) (*AttachmentResult, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("user_id is required")
+	}
+	if attachment.Path == "" {
+		return nil, fmt.Errorf("path is required")
+	}
+
+	user, ok, err := store.GetUser(s.usersPath, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, ErrUserNotObserved
+	}
+	if user.LastContextToken == "" {
+		return nil, ErrContextMissing
+	}
+
+	outbound, absolutePath, size, err := readAttachment(attachment)
+	if err != nil {
+		return nil, err
+	}
+
+	sendConfig := sendConfig{}
+	for _, option := range options {
+		if option != nil {
+			option(&sendConfig)
+		}
+	}
+	client := sendConfig.client
+	if client == nil {
+		client = s.NewClient()
+		if _, err := client.Login(ctx, false); err != nil {
+			return nil, err
+		}
+	}
+	if err := client.SendAttachmentWithContext(ctx, userID, outbound, user.LastContextToken); err != nil {
+		return nil, err
+	}
+	return &AttachmentResult{
+		Sent:      true,
+		UserID:    userID,
+		Path:      absolutePath,
+		FileName:  outbound.FileName,
+		SizeBytes: size,
+		Caption:   outbound.Caption,
+	}, nil
+}
+
+func readAttachment(attachment Attachment) (bot.OutboundAttachment, string, int64, error) {
+	absolutePath, err := filepath.Abs(attachment.Path)
+	if err != nil {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("resolve attachment path: %w", err)
+	}
+	info, err := os.Stat(absolutePath)
+	if err != nil {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("stat attachment: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("attachment is not a regular file: %s", absolutePath)
+	}
+	if info.Size() == 0 {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("attachment is empty: %s", absolutePath)
+	}
+	if info.Size() > maxOutboundAttachmentBytes {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("attachment exceeds %d MiB limit: %s", maxOutboundAttachmentBytes>>20, absolutePath)
+	}
+
+	fileName := strings.TrimSpace(attachment.FileName)
+	if fileName == "" {
+		fileName = filepath.Base(absolutePath)
+	}
+	if fileName == "." || fileName == ".." || strings.ContainsAny(fileName, `/\`) || filepath.Base(fileName) != fileName {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("file_name must be a base name")
+	}
+
+	file, err := os.Open(absolutePath)
+	if err != nil {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("open attachment: %w", err)
+	}
+
+	data, readErr := io.ReadAll(io.LimitReader(file, maxOutboundAttachmentBytes+1))
+	closeErr := file.Close()
+	if readErr != nil {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("read attachment: %w", readErr)
+	}
+	if closeErr != nil {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("close attachment: %w", closeErr)
+	}
+	if len(data) == 0 {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("attachment is empty: %s", absolutePath)
+	}
+	if int64(len(data)) > maxOutboundAttachmentBytes {
+		return bot.OutboundAttachment{}, "", 0, fmt.Errorf("attachment exceeds %d MiB limit: %s", maxOutboundAttachmentBytes>>20, absolutePath)
+	}
+	return bot.OutboundAttachment{
+		Data:     data,
+		FileName: fileName,
+		Caption:  attachment.Caption,
+	}, absolutePath, int64(len(data)), nil
 }
 
 // ListUsers returns observed users.

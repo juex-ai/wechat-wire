@@ -194,12 +194,15 @@ func msgSendCmd() *cobra.Command {
 	var userID string
 	var text string
 	var content string
+	var filePath string
+	var fileName string
+	var caption string
 	var format string
 	var verifyCode string
 
 	cmd := &cobra.Command{
 		Use:   "send",
-		Short: "Send a text message to a locally observed WeChat user",
+		Short: "Send text or a local attachment to an observed WeChat user",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := validateFormat(format, "text", "json"); err != nil {
 				return err
@@ -211,12 +214,28 @@ func msgSendCmd() *cobra.Command {
 			if messageText == "" {
 				messageText = content
 			}
-			if messageText == "" {
-				return fmt.Errorf("--text is required")
+			if messageText == "" && filePath == "" {
+				return fmt.Errorf("one of --text or --file is required")
+			}
+			if messageText != "" && filePath != "" {
+				return fmt.Errorf("--text and --file cannot be used together")
+			}
+			if filePath == "" && (fileName != "" || caption != "") {
+				return fmt.Errorf("--file_name and --caption require --file")
 			}
 
 			runtime := newSession(cmd.ErrOrStderr(), verifyCode)
-			result, err := runtime.SendText(cmd.Context(), userID, messageText)
+			var result any
+			var err error
+			if filePath != "" {
+				result, err = runtime.SendAttachment(cmd.Context(), userID, session.Attachment{
+					Path:     filePath,
+					FileName: fileName,
+					Caption:  caption,
+				})
+			} else {
+				result, err = runtime.SendText(cmd.Context(), userID, messageText)
+			}
 			if errors.Is(err, session.ErrUserNotObserved) {
 				return fmt.Errorf("user not found: %s; run wechat-wire listen first", userID)
 			}
@@ -229,13 +248,21 @@ func msgSendCmd() *cobra.Command {
 			if format == "json" {
 				return writeJSON(cmd.OutOrStdout(), result)
 			}
+			if attachmentResult, ok := result.(*session.AttachmentResult); ok {
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "ok: sent %s (%d bytes) to %s\n",
+					attachmentResult.FileName, attachmentResult.SizeBytes, attachmentResult.UserID)
+				return err
+			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "ok: sent to %s\n", userID)
 			return err
 		},
 	}
 	cmd.Flags().StringVar(&userID, "user_id", "", "WeChat user ID observed from incoming messages (required)")
-	cmd.Flags().StringVar(&text, "text", "", "Text message to send (required)")
+	cmd.Flags().StringVar(&text, "text", "", "Text message to send instead of --file")
 	cmd.Flags().StringVar(&content, "content", "", "Alias for --text")
+	cmd.Flags().StringVar(&filePath, "file", "", "Local image, video, or file path to send")
+	cmd.Flags().StringVar(&fileName, "file_name", "", "Optional recipient-facing base file name")
+	cmd.Flags().StringVar(&caption, "caption", "", "Optional attachment caption")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text|json")
 	cmd.Flags().StringVar(&verifyCode, "verify-code", "", "Pairing code for non-interactive login when WeChat requests one")
 	return cmd

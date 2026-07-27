@@ -44,6 +44,13 @@ type DownloadedMedia struct {
 	Format   string
 }
 
+// OutboundAttachment is a validated local file ready for the upstream SDK.
+type OutboundAttachment struct {
+	Data     []byte
+	FileName string
+	Caption  string
+}
+
 // Options configures either the real SDK adapter or the fake localtest bot.
 type Options struct {
 	BaseURL      string
@@ -65,6 +72,7 @@ type Client interface {
 	Download(ctx context.Context, msg *IncomingMessage) (*DownloadedMedia, error)
 	Send(ctx context.Context, userID, text string) error
 	SendWithContext(ctx context.Context, userID, text, contextToken string) error
+	SendAttachmentWithContext(ctx context.Context, userID string, attachment OutboundAttachment, contextToken string) error
 	SendTyping(ctx context.Context, userID string) error
 	StopTyping(ctx context.Context, userID string) error
 	Stop()
@@ -168,6 +176,22 @@ func (c *sdkClient) SendWithContext(ctx context.Context, userID, text, contextTo
 	return c.bot.Reply(ctx, &wechatbot.IncomingMessage{UserID: userID, ContextToken: contextToken}, text)
 }
 
+func (c *sdkClient) SendAttachmentWithContext(ctx context.Context, userID string, attachment OutboundAttachment, contextToken string) error {
+	if contextToken == "" {
+		return fmt.Errorf("no context_token for user %s", userID)
+	}
+	message := &wechatbot.IncomingMessage{UserID: userID, ContextToken: contextToken}
+	// iLink accepts one item per outbound media request. Send the caption first
+	// instead of letting the SDK combine text and image/video in one item_list.
+	if attachment.Caption != "" {
+		if err := c.bot.Reply(ctx, message, attachment.Caption); err != nil {
+			return fmt.Errorf("send attachment caption: %w", err)
+		}
+	}
+	content := wechatbot.SendFile(attachment.Data, attachment.FileName)
+	return c.bot.ReplyContent(ctx, message, content)
+}
+
 func (c *sdkClient) SendTyping(ctx context.Context, userID string) error {
 	return c.bot.SendTyping(ctx, userID)
 }
@@ -269,6 +293,23 @@ func (c *fakeClient) SendWithContext(ctx context.Context, userID, text, contextT
 		return fmt.Errorf("no context_token for user %s", userID)
 	}
 	return c.Send(context.Background(), userID, text)
+}
+
+func (c *fakeClient) SendAttachmentWithContext(ctx context.Context, userID string, attachment OutboundAttachment, contextToken string) error {
+	_ = ctx
+	if userID == "" {
+		return fmt.Errorf("user_id is required")
+	}
+	if contextToken == "" {
+		return fmt.Errorf("no context_token for user %s", userID)
+	}
+	if len(attachment.Data) == 0 {
+		return fmt.Errorf("attachment is empty")
+	}
+	if attachment.FileName == "" {
+		return fmt.Errorf("file_name is required")
+	}
+	return nil
 }
 
 func (c *fakeClient) SendTyping(ctx context.Context, userID string) error {

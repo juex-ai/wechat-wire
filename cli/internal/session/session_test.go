@@ -3,7 +3,9 @@ package session
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,12 +105,104 @@ func TestSessionSendTextRequiresObservedContext(t *testing.T) {
 	}
 }
 
+func TestSessionSendAttachmentUsesStoredContext(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.pdf")
+	data := []byte("fake pdf content")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+
+	client := &recordingClient{}
+	s := New(Config{UsersPath: filepath.Join(dir, "users.json")})
+	if err := s.RememberMessage(bot.IncomingMessage{
+		UserID:       "user-1",
+		Text:         "hello",
+		Type:         "text",
+		Timestamp:    time.Unix(100, 0),
+		ContextToken: "ctx-1",
+	}); err != nil {
+		t.Fatalf("RememberMessage: %v", err)
+	}
+
+	result, err := s.SendAttachment(context.Background(), "user-1", Attachment{
+		Path:    path,
+		Caption: "monthly report",
+	}, WithClient(client))
+	if err != nil {
+		t.Fatalf("SendAttachment: %v", err)
+	}
+	if !result.Sent || result.UserID != "user-1" || result.FileName != "report.pdf" || result.SizeBytes != int64(len(data)) {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if client.sentUserID != "user-1" || client.sentContextToken != "ctx-1" {
+		t.Fatalf("send target: user=%q context=%q", client.sentUserID, client.sentContextToken)
+	}
+	if string(client.sentAttachment.Data) != string(data) || client.sentAttachment.FileName != "report.pdf" || client.sentAttachment.Caption != "monthly report" {
+		t.Fatalf("attachment: %+v", client.sentAttachment)
+	}
+}
+
+func TestSessionSendAttachmentRejectsInvalidLocalFile(t *testing.T) {
+	dir := t.TempDir()
+	s := New(Config{UsersPath: filepath.Join(dir, "users.json")})
+	if err := s.RememberMessage(bot.IncomingMessage{
+		UserID:       "user-1",
+		Type:         "text",
+		Timestamp:    time.Unix(100, 0),
+		ContextToken: "ctx-1",
+	}); err != nil {
+		t.Fatalf("RememberMessage: %v", err)
+	}
+
+	emptyPath := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(emptyPath, nil, 0o600); err != nil {
+		t.Fatalf("write empty attachment: %v", err)
+	}
+	oversizedPath := filepath.Join(dir, "oversized.bin")
+	oversized, err := os.Create(oversizedPath)
+	if err != nil {
+		t.Fatalf("create oversized attachment: %v", err)
+	}
+	if err := oversized.Truncate(maxOutboundAttachmentBytes + 1); err != nil {
+		t.Fatalf("truncate oversized attachment: %v", err)
+	}
+	if err := oversized.Close(); err != nil {
+		t.Fatalf("close oversized attachment: %v", err)
+	}
+	regularPath := filepath.Join(dir, "regular.txt")
+	if err := os.WriteFile(regularPath, []byte("content"), 0o600); err != nil {
+		t.Fatalf("write regular attachment: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		attachment Attachment
+		want       string
+	}{
+		{name: "directory", attachment: Attachment{Path: dir}, want: "not a regular file"},
+		{name: "empty", attachment: Attachment{Path: emptyPath}, want: "attachment is empty"},
+		{name: "oversized", attachment: Attachment{Path: oversizedPath}, want: "exceeds 100 MiB limit"},
+		{name: "nested file name", attachment: Attachment{Path: regularPath, FileName: "nested/report.txt"}, want: "file_name must be a base name"},
+		{name: "parent file name", attachment: Attachment{Path: regularPath, FileName: ".."}, want: "file_name must be a base name"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := s.SendAttachment(context.Background(), "user-1", test.attachment, WithClient(&recordingClient{}))
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error: got %v want containing %q", err, test.want)
+			}
+		})
+	}
+}
+
 type recordingClient struct {
 	options          bot.Options
 	loginCalls       int
 	sentUserID       string
 	sentText         string
 	sentContextToken string
+	sentAttachment   bot.OutboundAttachment
 }
 
 func (c *recordingClient) Login(ctx context.Context, force bool) (*bot.Credentials, error) {
@@ -132,6 +226,13 @@ func (c *recordingClient) SendWithContext(ctx context.Context, userID, text, con
 	c.sentUserID = userID
 	c.sentText = text
 	c.sentContextToken = contextToken
+	return nil
+}
+
+func (c *recordingClient) SendAttachmentWithContext(ctx context.Context, userID string, attachment bot.OutboundAttachment, contextToken string) error {
+	c.sentUserID = userID
+	c.sentContextToken = contextToken
+	c.sentAttachment = attachment
 	return nil
 }
 

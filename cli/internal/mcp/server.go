@@ -76,6 +76,7 @@ Available tools:
 - wechat_wire_status: inspect runtime status.
 - wechat_wire_list_users: list locally observed WeChat users.
 - wechat_wire_send_message: send a text message to a user. The active MCP process must have received context for that user from WeChat first.
+- wechat_wire_send_attachment: send an image, video, or file from a readable local path. The file extension selects the WeChat media type.
 - wechat_wire_send_typing: show or stop the typing indicator for a user.
 - wechat_wire_forget_user: remove a user from the local user book.
 `,
@@ -140,6 +141,37 @@ func (s *Server) registerTools() {
 			return toolError(err), nil, nil
 		}
 		return toolText(fmt.Sprintf("ok: sent to %s", result.UserID)), nil, nil
+	})
+
+	type sendAttachmentArgs struct {
+		UserID   string `json:"user_id" jsonschema:"WeChat user ID observed from an incoming message"`
+		Path     string `json:"path" jsonschema:"Readable local path to the image, video, or file to send"`
+		FileName string `json:"file_name,omitempty" jsonschema:"Optional recipient-facing base file name; its extension selects the media type"`
+		Caption  string `json:"caption,omitempty" jsonschema:"Optional text sent with the attachment"`
+	}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_send_attachment",
+		Description: "Send a local image, video, or file to a WeChat user. Requires current context from an incoming message; images and videos are selected by file extension.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args sendAttachmentArgs) (*sdkmcp.CallToolResult, any, error) {
+		if args.UserID == "" {
+			return toolError(fmt.Errorf("user_id is required")), nil, nil
+		}
+		if args.Path == "" {
+			return toolError(fmt.Errorf("path is required")), nil, nil
+		}
+		client, err := s.ensureBot(ctx)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		result, err := s.getSessionModule().SendAttachment(ctx, args.UserID, session.Attachment{
+			Path:     args.Path,
+			FileName: args.FileName,
+			Caption:  args.Caption,
+		}, session.WithClient(client))
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		return toolText(fmt.Sprintf("ok: sent %s (%d bytes) to %s", result.FileName, result.SizeBytes, result.UserID)), nil, nil
 	})
 
 	type typingArgs struct {

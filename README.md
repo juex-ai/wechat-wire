@@ -25,6 +25,7 @@ wechat-wire user list
 # Listen for messages and record users
 wechat-wire listen
 wechat-wire msg send --user_id <wechat-user-id> --text "hi"
+wechat-wire msg send --user_id <wechat-user-id> --file ./report.pdf --caption "report"
 
 # Run the MCP server
 wechat-wire mcp
@@ -40,6 +41,8 @@ wechat-wire login --force
 wechat-wire listen --once --format json
 wechat-wire msg send --user_id <wechat-user-id> --text "hello"
 wechat-wire msg send --user_id <wechat-user-id> --content "hello" --format json
+wechat-wire msg send --user_id <wechat-user-id> --file ./image.png --caption "result"
+wechat-wire msg send --user_id <wechat-user-id> --file ./artifact.bin --file_name report.pdf
 wechat-wire user list --format json
 wechat-wire user show --user_id <wechat-user-id>
 wechat-wire user forget --user_id <wechat-user-id>
@@ -51,6 +54,7 @@ wechat-wire mcp --channel
 - `wechat_wire_status`
 - `wechat_wire_list_users`
 - `wechat_wire_send_message`
+- `wechat_wire_send_attachment`
 - `wechat_wire_send_typing`
 - `wechat_wire_forget_user`
 
@@ -68,8 +72,21 @@ file_name: image.png
 
 Downloaded files use mode `0600`, and media directories use mode `0700`. Voice messages are stored in the format returned by iLink, currently `.silk`. If a download fails, the message notification is still delivered with `media_download_error` in its body and metadata.
 
+Agents can send a readable local file with `wechat_wire_send_attachment`:
+
+```json
+{
+  "user_id": "<wechat-user-id>",
+  "path": "/absolute/path/to/report.pdf",
+  "caption": "optional caption",
+  "file_name": "optional-recipient-name.pdf"
+}
+```
+
+`path` may be absolute or relative to the MCP process workspace. `file_name` must be a base filename and is useful when a JueX artifact path has a generated `.bin` name. The upstream SDK sends common image extensions (`png`, `jpg`, `jpeg`, `gif`, `webp`, `bmp`, `svg`) and video extensions (`mp4`, `mov`, `webm`, `mkv`, `avi`) as native media; other extensions are sent as files. A caption is delivered as a separate text message immediately before the attachment to satisfy iLink's one-item media request contract. One attachment may be at most 100 MiB. Outbound SILK has no upstream voice-send API and is therefore sent as a normal file.
+
 The upstream SDK requires a current `context_token` before sending to a user. The long-lived MCP process obtains that context after it receives a message from the user.
-For direct CLI sends, `wechat-wire listen` records the latest context token for each observed user in the local config directory; `wechat-wire msg send` uses that stored context to send through the upstream SDK.
+For direct CLI sends, `wechat-wire listen` records the latest context token for each observed user in the local config directory; `wechat-wire msg send` uses that stored context to send text or `--file` content through the upstream SDK.
 
 ## Configuration
 
@@ -94,7 +111,7 @@ bash scripts/build.sh
 ```
 
 The E2E suite uses `WECHAT_WIRE_FAKE=1`, so it does not require real WeChat credentials. The `WECHAT_WIRE_FAKE*` variables are localtest hooks, not public runtime configuration.
-The MCP E2E suite also verifies that fake inbound media is saved under the isolated config directory and that notifications expose a readable absolute path.
+The MCP E2E suite also verifies that fake inbound media is saved under the isolated config directory, notifications expose a readable absolute path, and agents can send a local attachment.
 
 You can also test the CLI loop directly without a real WeChat login:
 
