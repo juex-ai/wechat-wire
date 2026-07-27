@@ -120,6 +120,10 @@ func (c *recordingClient) OnMessage(handler func(*bot.IncomingMessage)) {}
 
 func (c *recordingClient) Run(ctx context.Context) error { return nil }
 
+func (c *recordingClient) Download(ctx context.Context, msg *bot.IncomingMessage) (*bot.DownloadedMedia, error) {
+	return nil, nil
+}
+
 func (c *recordingClient) Send(ctx context.Context, userID, text string) error {
 	return c.SendWithContext(ctx, userID, text, "")
 }

@@ -15,11 +15,13 @@ import (
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
 	"github.com/juex-ai/wechat-wire/cli/internal/config"
+	"github.com/juex-ai/wechat-wire/cli/internal/media"
 	"github.com/juex-ai/wechat-wire/cli/internal/session"
 	"github.com/juex-ai/wechat-wire/cli/internal/status"
 )
 
 const channelCapabilityName = "claude/channel"
+const mediaDownloadTimeout = 2 * time.Minute
 
 // Server is the MCP stdio bridge for WeChat iLink Bot messages.
 type Server struct {
@@ -241,7 +243,9 @@ func (s *Server) claimBotInit(ctx context.Context) (bot.Client, *botInitAttempt,
 
 func (s *Server) initializeBot(baseCtx context.Context, attempt *botInitAttempt) {
 	client := s.getSessionModule().NewClient()
-	client.OnMessage(s.handleMessage)
+	client.OnMessage(func(msg *bot.IncomingMessage) {
+		s.handleMessage(baseCtx, client, msg)
+	})
 	if _, err := client.Login(baseCtx, false); err != nil {
 		s.finishBotInit(attempt, nil, err)
 		return
@@ -312,16 +316,73 @@ func (s *Server) sendLoginNotification(content, eventType string) {
 	s.sendChannelNotification(content, eventType, "", "login")
 }
 
-func (s *Server) handleMessage(msg *bot.IncomingMessage) {
+func (s *Server) handleMessage(ctx context.Context, client bot.Client, msg *bot.IncomingMessage) {
 	if msg == nil {
 		return
 	}
 	if err := s.getSessionModule().RememberMessage(*msg); err != nil {
 		s.log("remember user: %v", err)
 	}
-	content := fmt.Sprintf("wechat-wire message from user_id=%s type=%s at %s\n%s",
-		msg.UserID, msg.Type, msg.Timestamp.Local().Format("2006-01-02 15:04:05"), msg.Text)
-	s.sendChannelNotification(content, "message", msg.UserID, msg.Type)
+	if isMediaMessage(msg.Type) {
+		go s.downloadAndNotifyMedia(ctx, client, msg)
+		return
+	}
+	s.sendMessageNotification(msg, nil, nil)
+}
+
+func (s *Server) downloadAndNotifyMedia(ctx context.Context, client bot.Client, msg *bot.IncomingMessage) {
+	downloadCtx, cancel := context.WithTimeout(ctx, mediaDownloadTimeout)
+	defer cancel()
+
+	artifact, err := s.getSessionModule().DownloadMedia(downloadCtx, client, msg)
+	if err == nil && artifact == nil {
+		err = fmt.Errorf("message contains no downloadable media")
+	}
+	if err != nil {
+		s.log("download %s from %s: %v", msg.Type, msg.UserID, err)
+	}
+	s.sendMessageNotification(msg, artifact, err)
+}
+
+func (s *Server) sendMessageNotification(msg *bot.IncomingMessage, artifact *media.Artifact, downloadErr error) {
+	lines := []string{fmt.Sprintf("wechat-wire message from user_id=%s type=%s at %s",
+		msg.UserID, msg.Type, msg.Timestamp.Local().Format("2006-01-02 15:04:05"))}
+	if msg.Text != "" {
+		lines = append(lines, msg.Text)
+	}
+	meta := channelNotificationMeta{
+		EventType:   "message",
+		UserID:      msg.UserID,
+		MessageType: msg.Type,
+	}
+	if artifact != nil {
+		lines = append(lines, "local_path: "+artifact.LocalPath)
+		if artifact.FileName != "" {
+			lines = append(lines, "file_name: "+artifact.FileName)
+		}
+		meta.LocalPath = artifact.LocalPath
+		meta.FileName = artifact.FileName
+		meta.MediaType = artifact.MediaType
+		meta.MediaSizeBytes = artifact.Size
+	}
+	if downloadErr != nil {
+		lines = append(lines, "media_download_error: "+downloadErr.Error())
+		meta.MediaType = msg.Type
+		meta.MediaDownloadError = downloadErr.Error()
+	}
+	s.sendNotification(channelNotification{
+		Content: strings.Join(lines, "\n"),
+		Meta:    meta,
+	})
+}
+
+func isMediaMessage(messageType string) bool {
+	switch messageType {
+	case "image", "voice", "file", "video":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) setSession(session *sdkmcp.ServerSession) {
@@ -338,6 +399,7 @@ func (s *Server) getSessionModule() *session.Session {
 	}
 	s.runtime = session.New(session.Config{
 		UsersPath:  config.UsersPath(),
+		MediaDir:   config.MediaDir(),
 		Factory:    s.factory,
 		BotOptions: s.botOptions(),
 	})
@@ -363,19 +425,22 @@ func (s *Server) canNotifyChannel() bool {
 }
 
 func (s *Server) sendChannelNotification(content, eventType, userID, messageType string) {
-	if !s.canNotifyChannel() || s.getSession() == nil || s.transport == nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	params := channelNotification{
+	s.sendNotification(channelNotification{
 		Content: content,
 		Meta: channelNotificationMeta{
 			EventType:   eventType,
 			UserID:      userID,
 			MessageType: messageType,
 		},
+	})
+}
+
+func (s *Server) sendNotification(params channelNotification) {
+	if !s.canNotifyChannel() || s.getSession() == nil || s.transport == nil {
+		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	if err := s.transport.Notify(ctx, "notifications/claude/channel", params); err != nil {
 		s.log("failed to send notification: %v", err)
 	}

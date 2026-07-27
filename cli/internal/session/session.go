@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
+	"github.com/juex-ai/wechat-wire/cli/internal/media"
 	"github.com/juex-ai/wechat-wire/cli/internal/store"
 )
 
@@ -20,6 +22,7 @@ var (
 // Config is the interface to the WeChat Session Module.
 type Config struct {
 	UsersPath  string
+	MediaDir   string
 	Factory    bot.Factory
 	BotOptions bot.Options
 }
@@ -27,6 +30,7 @@ type Config struct {
 // Session is the deep Module that owns User Book and bot adapter choreography.
 type Session struct {
 	usersPath  string
+	mediaDir   string
 	factory    bot.Factory
 	botOptions bot.Options
 }
@@ -51,8 +55,13 @@ func New(config Config) *Session {
 	if factory == nil {
 		factory = bot.NewFromEnv
 	}
+	mediaDir := config.MediaDir
+	if mediaDir == "" && config.UsersPath != "" {
+		mediaDir = filepath.Join(filepath.Dir(config.UsersPath), "media")
+	}
 	return &Session{
 		usersPath:  config.UsersPath,
+		mediaDir:   mediaDir,
 		factory:    factory,
 		botOptions: config.BotOptions,
 	}
@@ -66,6 +75,21 @@ func (s *Session) NewClient() bot.Client {
 // RememberMessage records an incoming message in the User Book.
 func (s *Session) RememberMessage(msg bot.IncomingMessage) error {
 	return store.RememberUser(s.usersPath, msg)
+}
+
+// DownloadMedia downloads and persists media attached to an incoming message.
+func (s *Session) DownloadMedia(ctx context.Context, client bot.Client, msg *bot.IncomingMessage) (*media.Artifact, error) {
+	if client == nil {
+		return nil, fmt.Errorf("bot client is required")
+	}
+	if msg == nil {
+		return nil, fmt.Errorf("message is required")
+	}
+	download, err := client.Download(ctx, msg)
+	if err != nil {
+		return nil, err
+	}
+	return media.Save(s.mediaDir, *msg, download)
 }
 
 // WithClient reuses an already logged-in bot client for this send.

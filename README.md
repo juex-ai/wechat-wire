@@ -57,6 +57,17 @@ wechat-wire mcp --channel
 Incoming WeChat messages are delivered as `notifications/claude/channel` notifications when the MCP client advertises experimental `claude/channel` support, or when the server is started with `--channel`.
 If the MCP process needs a WeChat login, it sends a `login_required` channel notification containing the QR URL so the agent can guide the user to scan it.
 
+Inbound images, voice messages, files, and videos are downloaded and decrypted through the upstream SDK. `wechat-wire` saves them under `<config-dir>/media/YYYY-MM-DD/` and includes the absolute path in both the notification body and `meta.local_path`. Media metadata also includes `media_type`, `file_name`, and `media_size_bytes`.
+
+```text
+wechat-wire message from user_id=<id> type=image at 2026-07-27 10:45:16
+[image]
+local_path: /absolute/path/.config/wechat-wire/media/2026-07-27/...-image.png
+file_name: image.png
+```
+
+Downloaded files use mode `0600`, and media directories use mode `0700`. Voice messages are stored in the format returned by iLink, currently `.silk`. If a download fails, the message notification is still delivered with `media_download_error` in its body and metadata.
+
 The upstream SDK requires a current `context_token` before sending to a user. The long-lived MCP process obtains that context after it receives a message from the user.
 For direct CLI sends, `wechat-wire listen` records the latest context token for each observed user in the local config directory; `wechat-wire msg send` uses that stored context to send through the upstream SDK.
 
@@ -70,6 +81,7 @@ Runtime state is intentionally kept under the config directory:
 
 - `credentials.json` — upstream SDK credentials.
 - `users.json` — locally observed users and latest reply context.
+- `media/YYYY-MM-DD/` — downloaded inbound image, voice, file, and video content.
 
 SDK internals such as base URL, credential path, bot agent, and log level are fixed by `wechat-wire` instead of exposed as public environment variables.
 
@@ -82,6 +94,7 @@ bash scripts/build.sh
 ```
 
 The E2E suite uses `WECHAT_WIRE_FAKE=1`, so it does not require real WeChat credentials. The `WECHAT_WIRE_FAKE*` variables are localtest hooks, not public runtime configuration.
+The MCP E2E suite also verifies that fake inbound media is saved under the isolated config directory and that notifications expose a readable absolute path.
 
 You can also test the CLI loop directly without a real WeChat login:
 

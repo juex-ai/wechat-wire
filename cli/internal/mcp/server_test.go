@@ -206,6 +206,38 @@ func TestBotOptionsNotifyLoginQRCode(t *testing.T) {
 	}
 }
 
+func TestSendMessageNotificationIncludesMediaDownloadError(t *testing.T) {
+	conn := &captureConnection{}
+	server := NewServer("test", true, nil)
+	server.transport = &channelTransport{
+		conn: &channelConnection{inner: conn, writeMu: &sync.Mutex{}},
+	}
+	server.mcpSession = &sdkmcp.ServerSession{}
+	server.channelReady = true
+
+	server.sendMessageNotification(&bot.IncomingMessage{
+		UserID:    "user-media",
+		Text:      "[voice]",
+		Type:      "voice",
+		Timestamp: time.Unix(100, 0),
+	}, nil, errors.New("cdn unavailable"))
+
+	req := conn.onlyRequest(t)
+	var params channelNotification
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		t.Fatalf("unmarshal params: %v", err)
+	}
+	if !stringsContainsAll(params.Content, "[voice]", "media_download_error: cdn unavailable") {
+		t.Fatalf("content missing media failure details: %q", params.Content)
+	}
+	if params.Meta.EventType != "message" || params.Meta.MessageType != "voice" {
+		t.Fatalf("unexpected meta: %+v", params.Meta)
+	}
+	if params.Meta.MediaType != "voice" || params.Meta.MediaDownloadError != "cdn unavailable" {
+		t.Fatalf("unexpected media failure meta: %+v", params.Meta)
+	}
+}
+
 func waitForRunCall(t *testing.T, client *blockingClient, want int32) {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
@@ -262,6 +294,10 @@ func (c *blockingClient) Run(ctx context.Context) error {
 	c.runCalls.Add(1)
 	<-ctx.Done()
 	return nil
+}
+
+func (c *blockingClient) Download(ctx context.Context, msg *bot.IncomingMessage) (*bot.DownloadedMedia, error) {
+	return nil, fmt.Errorf("unexpected download")
 }
 
 func (c *blockingClient) Send(ctx context.Context, userID, text string) error {

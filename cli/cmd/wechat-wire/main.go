@@ -372,6 +372,7 @@ func mcpCmd() *cobra.Command {
 func newSession(events io.Writer, verifyCode string) *session.Session {
 	return session.New(session.Config{
 		UsersPath:  config.UsersPath(),
+		MediaDir:   config.MediaDir(),
 		Factory:    bot.NewFromEnv,
 		BotOptions: botOptions(events, verifyCode),
 	})
