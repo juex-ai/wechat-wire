@@ -19,7 +19,7 @@ After completing any code change, build the binary, run affected unit tests, and
    - Verifies CLI and MCP both cross the WeChat Session seam for context-backed sends
    - Starts `bin/wechat-wire mcp`
    - Verifies incoming fake messages become MCP notifications
-   - Verifies inbound media is saved privately and notifications contain a readable absolute path
+   - Verifies inbound media is saved privately and notifications contain a readable absolute path plus a native JueX attachment
    - Verifies MCP tools can list users and send a fake reply
 
 ## Failure Handling
