@@ -15,6 +15,7 @@
 | WeChat Session module      |
 | - User Book choreography   |
 | - context-backed sends     |
+| - inbound media handling   |
 | - bot adapter creation     |
 +-------------+--------------+
               |
@@ -46,13 +47,15 @@ Commands:
 
 ## WeChat Session Module
 
-The WeChat Session module is the seam shared by CLI and MCP callers. It owns the interface for recording incoming messages, listing/forgetting observed users, creating bot adapters, and sending text with the latest context token from the User Book.
+The WeChat Session module is the seam shared by CLI and MCP callers. It owns the interface for recording incoming messages, downloading inbound media, listing/forgetting observed users, creating bot adapters, and sending text with the latest context token from the User Book.
 
 This keeps the context-token invariant in one implementation: callers do not know how `users.json` is shaped, when login must happen, or whether the concrete adapter is the real upstream SDK or fake localtest adapter.
 
+The bot adapter retains the upstream parsed message only long enough to call the SDK's `Download` method. `cli/internal/media` then persists decrypted bytes under the active config directory with private permissions and sanitized filenames. Protocol download, CDN crypto, and media parsing remain owned by the upstream SDK.
+
 ## MCP
 
-The MCP server logs in through the same SDK adapter and starts the message listener after MCP initialization. Incoming WeChat messages are recorded in the local user book and forwarded as `notifications/claude/channel` notifications when supported. When SDK login needs QR scanning, the MCP server sends a `login_required` channel notification with the QR URL before continuing the login flow.
+The MCP server logs in through the same SDK adapter and starts the message listener after MCP initialization. Incoming WeChat messages are recorded in the local user book and forwarded as `notifications/claude/channel` notifications when supported. Media messages are downloaded asynchronously so CDN I/O does not block the listener; their notifications contain an absolute local path after persistence completes. When SDK login needs QR scanning, the MCP server sends a `login_required` channel notification with the QR URL before continuing the login flow.
 
 Tools:
 
@@ -76,7 +79,8 @@ Files:
 
 - `credentials.json` — upstream SDK credentials.
 - `users.json` — local user book with `user_id`, last message metadata, message count, and the latest context token needed for direct CLI replies. Treat this file as local private runtime state.
+- `media/YYYY-MM-DD/` — decrypted inbound media. Directories use mode `0700`; files use mode `0600`.
 
 ## Test Backend
 
-`WECHAT_WIRE_FAKE=1` switches the bot factory to an in-process fake implementation. Fake messages are supplied with `WECHAT_WIRE_FAKE_MESSAGES_JSON`, allowing CLI and MCP tests to run without a real WeChat login.
+`WECHAT_WIRE_FAKE=1` switches the bot factory to an in-process fake implementation. Fake messages are supplied with `WECHAT_WIRE_FAKE_MESSAGES_JSON`, allowing CLI and MCP tests to run without a real WeChat login. Media fixtures use `media_base64`, `file_name`, and `media_format` fields inside each fake message object.

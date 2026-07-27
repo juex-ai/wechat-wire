@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -53,6 +54,84 @@ func TestMCPFakeMessageFlow(t *testing.T) {
 	sendResp := server.waitResponse(3)
 	assertNoRPCError(t, sendResp)
 	assertToolTextContains(t, sendResp, "ok: sent to user-1")
+}
+
+func TestMCPMediaMessageDownloadsToLocalPath(t *testing.T) {
+	bin := binary(t)
+	dataDir := t.TempDir()
+	const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+
+	server := startMCPServer(t, bin, dataDir, map[string]string{
+		"WECHAT_WIRE_FAKE": "1",
+		"WECHAT_WIRE_FAKE_MESSAGES_JSON": `[{
+			"user_id":"user-media",
+			"text":"[image]",
+			"type":"image",
+			"context_token":"ctx-media",
+			"message_id":12345,
+			"media_base64":"` + imageBase64 + `"
+		}]`,
+	})
+
+	server.send(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2024-11-05",
+			"capabilities": map[string]any{
+				"experimental": map[string]any{"claude/channel": map[string]any{}},
+			},
+			"clientInfo": map[string]any{"name": "wechat-wire-e2e", "version": "test"},
+		},
+	})
+	assertNoRPCError(t, server.waitResponse(1))
+
+	server.send(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized", "params": map[string]any{}})
+	notification := server.waitNotification("notifications/claude/channel", func(params map[string]any) bool {
+		meta, _ := params["meta"].(map[string]any)
+		path, _ := meta["local_path"].(string)
+		return path != ""
+	})
+	assertChannelEvent(t, notification, "message")
+
+	params := notification["params"].(map[string]any)
+	content, _ := params["content"].(string)
+	meta := params["meta"].(map[string]any)
+	localPath, _ := meta["local_path"].(string)
+	if !filepath.IsAbs(localPath) {
+		t.Fatalf("local_path is not absolute: %q", localPath)
+	}
+	mediaDir := filepath.Join(dataDir, ".config", "wechat-wire", "media")
+	rel, err := filepath.Rel(mediaDir, localPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		t.Fatalf("local_path %q is outside media dir %q", localPath, mediaDir)
+	}
+	if !strings.Contains(content, "local_path: "+localPath) {
+		t.Fatalf("notification content missing local path:\n%s", content)
+	}
+	if got := meta["media_type"]; got != "image" {
+		t.Fatalf("media_type: got %v want image", got)
+	}
+
+	want, err := base64.StdEncoding.DecodeString(imageBase64)
+	if err != nil {
+		t.Fatalf("decode fixture: %v", err)
+	}
+	got, err := os.ReadFile(localPath)
+	if err != nil {
+		t.Fatalf("read downloaded media: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("downloaded media content mismatch: got %d bytes want %d", len(got), len(want))
+	}
+	info, err := os.Stat(localPath)
+	if err != nil {
+		t.Fatalf("stat downloaded media: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("downloaded media mode: got %o want 600", info.Mode().Perm())
+	}
 }
 
 func binary(t *testing.T) string {

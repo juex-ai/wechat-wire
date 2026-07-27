@@ -15,9 +15,14 @@ type channelNotification struct {
 }
 
 type channelNotificationMeta struct {
-	EventType   string `json:"event_type"`
-	UserID      string `json:"user_id,omitempty"`
-	MessageType string `json:"message_type,omitempty"`
+	EventType          string `json:"event_type"`
+	UserID             string `json:"user_id,omitempty"`
+	MessageType        string `json:"message_type,omitempty"`
+	LocalPath          string `json:"local_path,omitempty"`
+	FileName           string `json:"file_name,omitempty"`
+	MediaType          string `json:"media_type,omitempty"`
+	MediaSizeBytes     int64  `json:"media_size_bytes,omitempty"`
+	MediaDownloadError string `json:"media_download_error,omitempty"`
 }
 
 type channelTransport struct {

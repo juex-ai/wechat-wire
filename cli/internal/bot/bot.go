@@ -3,6 +3,7 @@ package bot
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,7 +29,19 @@ type IncomingMessage struct {
 	Text         string    `json:"text"`
 	Type         string    `json:"type"`
 	Timestamp    time.Time `json:"timestamp"`
+	MessageID    int64     `json:"message_id,omitempty"`
 	ContextToken string    `json:"-"`
+
+	sdkMessage *wechatbot.IncomingMessage
+	fakeMedia  *DownloadedMedia
+}
+
+// DownloadedMedia is decrypted inbound media returned by a bot client.
+type DownloadedMedia struct {
+	Data     []byte
+	Type     string
+	FileName string
+	Format   string
 }
 
 // Options configures either the real SDK adapter or the fake localtest bot.
@@ -49,6 +62,7 @@ type Client interface {
 	Login(ctx context.Context, force bool) (*Credentials, error)
 	OnMessage(handler func(*IncomingMessage))
 	Run(ctx context.Context) error
+	Download(ctx context.Context, msg *IncomingMessage) (*DownloadedMedia, error)
 	Send(ctx context.Context, userID, text string) error
 	SendWithContext(ctx context.Context, userID, text, contextToken string) error
 	SendTyping(ctx context.Context, userID string) error
@@ -104,18 +118,43 @@ func (c *sdkClient) Login(ctx context.Context, force bool) (*Credentials, error)
 
 func (c *sdkClient) OnMessage(handler func(*IncomingMessage)) {
 	c.bot.OnMessage(func(msg *wechatbot.IncomingMessage) {
+		var messageID int64
+		if msg.Raw != nil {
+			messageID = msg.Raw.MessageID
+		}
 		handler(&IncomingMessage{
 			UserID:       msg.UserID,
 			Text:         msg.Text,
 			Type:         string(msg.Type),
 			Timestamp:    msg.Timestamp,
+			MessageID:    messageID,
 			ContextToken: msg.ContextToken,
+			sdkMessage:   msg,
 		})
 	})
 }
 
 func (c *sdkClient) Run(ctx context.Context) error {
 	return c.bot.Run(ctx)
+}
+
+func (c *sdkClient) Download(ctx context.Context, msg *IncomingMessage) (*DownloadedMedia, error) {
+	if msg == nil || msg.sdkMessage == nil {
+		return nil, fmt.Errorf("message has no SDK media reference")
+	}
+	download, err := c.bot.Download(ctx, msg.sdkMessage)
+	if err != nil {
+		return nil, err
+	}
+	if download == nil {
+		return nil, nil
+	}
+	return &DownloadedMedia{
+		Data:     download.Data,
+		Type:     download.Type,
+		FileName: download.FileName,
+		Format:   download.Format,
+	}, nil
 }
 
 func (c *sdkClient) Send(ctx context.Context, userID, text string) error {
@@ -211,6 +250,19 @@ func (c *fakeClient) Send(ctx context.Context, userID, text string) error {
 	return nil
 }
 
+func (c *fakeClient) Download(ctx context.Context, msg *IncomingMessage) (*DownloadedMedia, error) {
+	_ = ctx
+	if msg == nil {
+		return nil, fmt.Errorf("message is required")
+	}
+	if msg.fakeMedia == nil {
+		return nil, nil
+	}
+	download := *msg.fakeMedia
+	download.Data = append([]byte(nil), msg.fakeMedia.Data...)
+	return &download, nil
+}
+
 func (c *fakeClient) SendWithContext(ctx context.Context, userID, text, contextToken string) error {
 	_ = ctx
 	if contextToken == "" {
@@ -251,7 +303,11 @@ type fakeMessageJSON struct {
 	Text         string `json:"text"`
 	Type         string `json:"type"`
 	Timestamp    int64  `json:"timestamp"`
+	MessageID    int64  `json:"message_id"`
 	ContextToken string `json:"context_token"`
+	MediaBase64  string `json:"media_base64"`
+	FileName     string `json:"file_name"`
+	MediaFormat  string `json:"media_format"`
 }
 
 func fakeMessagesFromEnv() ([]*IncomingMessage, error) {
@@ -276,13 +332,27 @@ func fakeMessagesFromEnv() ([]*IncomingMessage, error) {
 		if msg.Timestamp != 0 {
 			ts = time.Unix(msg.Timestamp, 0)
 		}
-		out = append(out, &IncomingMessage{
+		incoming := &IncomingMessage{
 			UserID:       msg.UserID,
 			Text:         msg.Text,
 			Type:         msgType,
 			Timestamp:    ts,
+			MessageID:    msg.MessageID,
 			ContextToken: msg.ContextToken,
-		})
+		}
+		if msg.MediaBase64 != "" {
+			data, err := base64.StdEncoding.DecodeString(msg.MediaBase64)
+			if err != nil {
+				return nil, fmt.Errorf("fake message %d media_base64: %w", i, err)
+			}
+			incoming.fakeMedia = &DownloadedMedia{
+				Data:     data,
+				Type:     msgType,
+				FileName: msg.FileName,
+				Format:   msg.MediaFormat,
+			}
+		}
+		out = append(out, incoming)
 	}
 	return out, nil
 }

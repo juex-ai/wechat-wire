@@ -95,6 +95,11 @@ func UsersPath() string {
 	return filepath.Join(Dir(), "users.json")
 }
 
+// MediaDir returns the private directory for downloaded inbound media.
+func MediaDir() string {
+	return filepath.Join(Dir(), "media")
+}
+
 // LogLevel returns the fixed SDK log level.
 func LogLevel() string {
 	return "info"
