@@ -54,6 +54,19 @@ func TestMCPFakeMessageFlow(t *testing.T) {
 	sendResp := server.waitResponse(3)
 	assertNoRPCError(t, sendResp)
 	assertToolTextContains(t, sendResp, "ok: sent to user-1")
+
+	attachmentPath := filepath.Join(dataDir, "report.txt")
+	if err := os.WriteFile(attachmentPath, []byte("attachment from mcp"), 0o600); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+	callTool(t, server, 4, "wechat_wire_send_attachment", map[string]any{
+		"user_id": "user-1",
+		"path":    attachmentPath,
+		"caption": "report",
+	})
+	attachmentResp := server.waitResponse(4)
+	assertNoRPCError(t, attachmentResp)
+	assertToolTextContains(t, attachmentResp, "ok: sent report.txt (19 bytes) to user-1")
 }
 
 func TestMCPMediaMessageDownloadsToLocalPath(t *testing.T) {

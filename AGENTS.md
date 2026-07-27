@@ -18,8 +18,9 @@ For product overview and quick start, see `README.md`. For architecture internal
 - CLI config uses `--homedir`, then `WECHAT_WIRE_DIR`, then the current home directory. The final directory is normalized to `.config/wechat-wire`.
 - SDK credentials live at `<config-dir>/credentials.json`. Do not add SDK-level environment variables unless there is a product requirement for the user-facing configuration.
 - The local user book lives at `<config-dir>/users.json`; it stores observed user IDs, last-message metadata, and the latest context token used by `msg send`. Treat it as private local runtime state.
-- The WeChat Session module in `cli/internal/session` owns User Book choreography, bot adapter creation, remembered message handling, and context-backed sends. CLI and MCP callers should use that seam instead of reimplementing context-token lookup.
+- The WeChat Session module in `cli/internal/session` owns User Book choreography, bot adapter creation, remembered message handling, local outbound-file validation, and context-backed sends. CLI and MCP callers should use that seam instead of reimplementing context-token lookup or file loading.
 - Use the upstream SDK's media download/decryption API. Persist inbound media under `<config-dir>/media/` through `cli/internal/media`; do not expose CDN references or reimplement CDN crypto.
+- Use the upstream SDK's `ReplyContent`/`SendFile` path for outbound attachments. Do not duplicate CDN upload, encryption, or media-type routing.
 - Build metadata is injected with `-ldflags` into `main.version` and `main.commit`.
 - MCP message notifications use `notifications/claude/channel` when the client advertises experimental `claude/channel`, or when `wechat-wire mcp --channel` is used.
 

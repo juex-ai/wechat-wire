@@ -308,6 +308,10 @@ func (c *blockingClient) SendWithContext(ctx context.Context, userID, text, cont
 	return fmt.Errorf("unexpected send")
 }
 
+func (c *blockingClient) SendAttachmentWithContext(ctx context.Context, userID string, attachment bot.OutboundAttachment, contextToken string) error {
+	return fmt.Errorf("unexpected attachment send")
+}
+
 func (c *blockingClient) SendTyping(ctx context.Context, userID string) error {
 	return fmt.Errorf("unexpected typing")
 }

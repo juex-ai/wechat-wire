@@ -38,6 +38,24 @@ func TestCLIListenAndSendWithFakeBackend(t *testing.T) {
 	if !got.Sent || got.UserID != "user-1" || got.Text != "reply from cli" {
 		t.Fatalf("unexpected send response: %+v", got)
 	}
+
+	attachmentPath := filepath.Join(dataDir, "report.txt")
+	if err := os.WriteFile(attachmentPath, []byte("attachment from cli"), 0o600); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+	attachmentOut := runCLI(t, env, bin, "msg", "send", "--user_id", "user-1", "--file", attachmentPath, "--caption", "report", "--format", "json")
+	var attachment struct {
+		Sent      bool   `json:"sent"`
+		UserID    string `json:"user_id"`
+		FileName  string `json:"file_name"`
+		SizeBytes int64  `json:"size_bytes"`
+	}
+	if err := json.Unmarshal([]byte(attachmentOut), &attachment); err != nil {
+		t.Fatalf("parse attachment JSON: %v\n%s", err, attachmentOut)
+	}
+	if !attachment.Sent || attachment.UserID != "user-1" || attachment.FileName != "report.txt" || attachment.SizeBytes != 19 {
+		t.Fatalf("unexpected attachment response: %+v", attachment)
+	}
 }
 
 func binary(t *testing.T) string {
