@@ -355,11 +355,13 @@ func (s *Server) sendMessageNotification(msg *bot.IncomingMessage, artifact *med
 		UserID:      msg.UserID,
 		MessageType: msg.Type,
 	}
+	var attachments []channelAttachment
 	if artifact != nil {
 		lines = append(lines, "local_path: "+artifact.LocalPath)
 		if artifact.FileName != "" {
 			lines = append(lines, "file_name: "+artifact.FileName)
 		}
+		attachments = []channelAttachment{{Path: artifact.LocalPath}}
 		meta.LocalPath = artifact.LocalPath
 		meta.FileName = artifact.FileName
 		meta.MediaType = artifact.MediaType
@@ -371,8 +373,9 @@ func (s *Server) sendMessageNotification(msg *bot.IncomingMessage, artifact *med
 		meta.MediaDownloadError = downloadErr.Error()
 	}
 	s.sendNotification(channelNotification{
-		Content: strings.Join(lines, "\n"),
-		Meta:    meta,
+		Content:     strings.Join(lines, "\n"),
+		Meta:        meta,
+		Attachments: attachments,
 	})
 }
 

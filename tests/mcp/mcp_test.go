@@ -113,6 +113,14 @@ func TestMCPMediaMessageDownloadsToLocalPath(t *testing.T) {
 	if got := meta["media_type"]; got != "image" {
 		t.Fatalf("media_type: got %v want image", got)
 	}
+	attachments, ok := params["attachments"].([]any)
+	if !ok || len(attachments) != 1 {
+		t.Fatalf("attachments: got %#v want one attachment", params["attachments"])
+	}
+	attachment, ok := attachments[0].(map[string]any)
+	if !ok || attachment["path"] != localPath {
+		t.Fatalf("attachment: got %#v want path %q", attachments[0], localPath)
+	}
 
 	want, err := base64.StdEncoding.DecodeString(imageBase64)
 	if err != nil {

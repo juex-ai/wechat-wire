@@ -10,8 +10,13 @@ import (
 )
 
 type channelNotification struct {
-	Content string                  `json:"content"`
-	Meta    channelNotificationMeta `json:"meta"`
+	Content     string                  `json:"content"`
+	Meta        channelNotificationMeta `json:"meta"`
+	Attachments []channelAttachment     `json:"attachments,omitempty"`
+}
+
+type channelAttachment struct {
+	Path string `json:"path"`
 }
 
 type channelNotificationMeta struct {

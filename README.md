@@ -57,7 +57,7 @@ wechat-wire mcp --channel
 Incoming WeChat messages are delivered as `notifications/claude/channel` notifications when the MCP client advertises experimental `claude/channel` support, or when the server is started with `--channel`.
 If the MCP process needs a WeChat login, it sends a `login_required` channel notification containing the QR URL so the agent can guide the user to scan it.
 
-Inbound images, voice messages, files, and videos are downloaded and decrypted through the upstream SDK. `wechat-wire` saves them under `<config-dir>/media/YYYY-MM-DD/` and includes the absolute path in both the notification body and `meta.local_path`. Media metadata also includes `media_type`, `file_name`, and `media_size_bytes`.
+Inbound images, voice messages, files, and videos are downloaded and decrypted through the upstream SDK. `wechat-wire` saves them under `<config-dir>/media/YYYY-MM-DD/` and includes the absolute path in the notification body, `meta.local_path`, and `attachments[].path`. JueX validates the native attachment, copies it to durable event-media storage, and turns supported images into model image blocks. Media metadata also includes `media_type`, `file_name`, and `media_size_bytes`.
 
 ```text
 wechat-wire message from user_id=<id> type=image at 2026-07-27 10:45:16
