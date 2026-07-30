@@ -97,6 +97,7 @@ For direct CLI sends, `wechat-wire listen` records the latest context token for 
 The optional context expiry guard sends one direct reminder before the latest observed context token is expected to expire. It is disabled by default because iLink does not provide an authoritative expiry timestamp; the default policy estimates a 24-hour lifetime and reminds 60 minutes before expiry.
 
 Only an inbound user message carrying a context token starts a fresh cycle. Sending the reminder does not extend the cycle. Each cycle is durably claimed before sending so process restarts and concurrent `listen`/`mcp` processes do not send duplicates.
+Existing user records created by older `wechat-wire` versions have no trustworthy context observation time and remain unscheduled until the next token-bearing inbound message.
 
 Reminders are restricted to a local-time window, defaulting to `08:00` through `22:00`. If the normal reminder time falls outside the window, it moves earlier to the most recent window end. For example, a token estimated to expire at `03:00` is reminded at `22:00` the previous evening. If the service misses that window, it records the cycle as skipped and does not send a late-night catch-up.
 

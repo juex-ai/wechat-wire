@@ -153,6 +153,62 @@ func TestRunnerDoesNotRetryFailedReminderAfterRestart(t *testing.T) {
 	}
 }
 
+func TestRunnerWaitsForFreshContextObservationForLegacyUser(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "context-guard.json")
+	statePath := filepath.Join(dir, "context-guard-state.json")
+	usersPath := filepath.Join(dir, "users.json")
+	enabled := true
+	ttl := 120
+	lead := 60
+	timezone := "UTC"
+	if _, err := UpdateConfig(configPath, ConfigPatch{
+		Enabled:           &enabled,
+		AssumedTTLMinutes: &ttl,
+		LeadTimeMinutes:   &lead,
+		Timezone:          &timezone,
+	}); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+	if err := store.WriteUserBook(usersPath, &store.UserBook{Users: map[string]store.UserRecord{
+		"legacy-user": {
+			UserID:           "legacy-user",
+			LastSeenAt:       time.Date(2026, 7, 30, 10, 0, 0, 0, time.UTC).Unix(),
+			HasContext:       true,
+			LastContextToken: "legacy-context",
+		},
+	}}); err != nil {
+		t.Fatalf("WriteUserBook: %v", err)
+	}
+
+	sends := 0
+	runner := NewRunner(RunnerConfig{
+		ConfigPath: configPath,
+		StatePath:  statePath,
+		UsersPath:  usersPath,
+		Now: func() time.Time {
+			return time.Date(2026, 7, 30, 11, 0, 0, 0, time.UTC)
+		},
+		Send: func(ctx context.Context, userID, text string) error {
+			sends++
+			return nil
+		},
+	})
+	if err := runner.Check(context.Background()); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if sends != 0 {
+		t.Fatalf("send count: got %d want 0", sends)
+	}
+	state, err := ReadState(statePath)
+	if err != nil {
+		t.Fatalf("ReadState: %v", err)
+	}
+	if _, exists := state.Users["legacy-user"]; exists {
+		t.Fatalf("legacy context should remain unscheduled: %+v", state.Users["legacy-user"])
+	}
+}
+
 func TestRunnerSkipsReminderAfterQuietHourDeadline(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "context-guard.json")

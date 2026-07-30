@@ -156,9 +156,6 @@ func (r *Runner) claimDueReminders(users []store.UserRecord, config Config, now 
 		}
 		observedUnix := user.ContextObservedAt
 		if observedUnix == 0 {
-			observedUnix = user.LastSeenAt
-		}
-		if observedUnix == 0 {
 			continue
 		}
 		observedAt := time.Unix(observedUnix, 0)
@@ -292,10 +289,7 @@ func contextCycleID(userID, contextToken string, observedAt int64) string {
 }
 
 func contextObservedAt(user store.UserRecord) int64 {
-	if user.ContextObservedAt != 0 {
-		return user.ContextObservedAt
-	}
-	return user.LastSeenAt
+	return user.ContextObservedAt
 }
 
 func truncateError(value string) string {

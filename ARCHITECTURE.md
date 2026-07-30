@@ -87,6 +87,7 @@ The upstream SDK only allows proactive sends after it has a `context_token` for 
 `cli/internal/contextguard` is an independent scheduler around the Session module. It derives an estimated expiry and reminder time from the latest inbound context observation, claims due work under a cross-process file lock, persists the claim before network I/O, and delegates the actual message to `Session.SendText`.
 
 The persisted claim provides at-most-once behavior across process crashes, restarts, and concurrent `listen`/`mcp` processes. A failed or interrupted attempt is terminal for that context cycle because retrying an ambiguous network result could duplicate the user-visible reminder. A later inbound message creates a new cycle and rearms the scheduler.
+Legacy User Book records without `context_observed_at` are not migrated from `last_seen_at`; they remain unscheduled until a new token-bearing inbound message establishes an authoritative local observation time.
 
 The configured local-time window is also a delivery deadline. A reminder whose nominal time is outside the window moves to the preceding window end; a process that resumes after that deadline marks the cycle skipped rather than sending during quiet hours. MCP configuration changes and inbound messages wake the in-process scheduler immediately; a 30-second poll covers cross-process changes such as the CLI editing the policy.
 
