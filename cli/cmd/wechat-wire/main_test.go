@@ -129,3 +129,45 @@ func TestMsgSendFakeUsesRecordedUserContext(t *testing.T) {
 		t.Fatalf("unexpected msg send response: %+v", got)
 	}
 }
+
+func TestContextGuardSetAndShowJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WECHAT_WIRE_DIR", dir)
+
+	template := "Please reply within {{remaining_minutes}} minutes."
+	stdout, _, err := runArgs(
+		"context-guard", "set",
+		"--enabled=true",
+		"--lead-time-minutes=90",
+		"--timezone=Asia/Shanghai",
+		"--message-template="+template,
+		"--format=json",
+	)
+	if err != nil {
+		t.Fatalf("context-guard set: %v", err)
+	}
+	var updated struct {
+		Enabled         bool   `json:"enabled"`
+		LeadTimeMinutes int    `json:"lead_time_minutes"`
+		Timezone        string `json:"timezone"`
+		MessageTemplate string `json:"message_template"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &updated); err != nil {
+		t.Fatalf("set JSON: %v\n%s", err, stdout)
+	}
+	if !updated.Enabled || updated.LeadTimeMinutes != 90 || updated.Timezone != "Asia/Shanghai" || updated.MessageTemplate != template {
+		t.Fatalf("unexpected updated config: %+v", updated)
+	}
+
+	stdout, _, err = runArgs("context-guard", "show", "--format=json")
+	if err != nil {
+		t.Fatalf("context-guard show: %v", err)
+	}
+	var shown map[string]any
+	if err := json.Unmarshal([]byte(stdout), &shown); err != nil {
+		t.Fatalf("show JSON: %v\n%s", err, stdout)
+	}
+	if shown["enabled"] != true || shown["message_template"] != template {
+		t.Fatalf("unexpected shown config: %+v", shown)
+	}
+}

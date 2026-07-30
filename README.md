@@ -46,6 +46,8 @@ wechat-wire msg send --user_id <wechat-user-id> --file ./artifact.bin --file_nam
 wechat-wire user list --format json
 wechat-wire user show --user_id <wechat-user-id>
 wechat-wire user forget --user_id <wechat-user-id>
+wechat-wire context-guard show --format json
+wechat-wire context-guard set --enabled=true --timezone Asia/Shanghai
 wechat-wire mcp --channel
 ```
 
@@ -57,6 +59,8 @@ wechat-wire mcp --channel
 - `wechat_wire_send_attachment`
 - `wechat_wire_send_typing`
 - `wechat_wire_forget_user`
+- `wechat_wire_get_context_guard`
+- `wechat_wire_configure_context_guard`
 
 Incoming WeChat messages are delivered as `notifications/claude/channel` notifications when the MCP client advertises experimental `claude/channel` support, or when the server is started with `--channel`.
 If the MCP process needs a WeChat login, it sends a `login_required` channel notification containing the QR URL so the agent can guide the user to scan it.
@@ -88,6 +92,30 @@ Agents can send a readable local file with `wechat_wire_send_attachment`:
 The upstream SDK requires a current `context_token` before sending to a user. The long-lived MCP process obtains that context after it receives a message from the user.
 For direct CLI sends, `wechat-wire listen` records the latest context token for each observed user in the local config directory; `wechat-wire msg send` uses that stored context to send text or `--file` content through the upstream SDK.
 
+## Context Expiry Guard
+
+The optional context expiry guard sends one direct reminder before the latest observed context token is expected to expire. It is disabled by default because iLink does not provide an authoritative expiry timestamp; the default policy estimates a 24-hour lifetime and reminds 60 minutes before expiry.
+
+Only an inbound user message carrying a context token starts a fresh cycle. Sending the reminder does not extend the cycle. Each cycle is durably claimed before sending so process restarts and concurrent `listen`/`mcp` processes do not send duplicates.
+Existing user records created by older `wechat-wire` versions have no trustworthy context observation time and remain unscheduled until the next token-bearing inbound message.
+
+Reminders are restricted to a local-time window, defaulting to `08:00` through `22:00`. If the normal reminder time falls outside the window, it moves earlier to the most recent window end. For example, a token estimated to expire at `03:00` is reminded at `22:00` the previous evening. If the service misses that window, it records the cycle as skipped and does not send a late-night catch-up.
+
+```bash
+wechat-wire context-guard set \
+  --enabled=true \
+  --assumed-ttl-minutes 1440 \
+  --lead-time-minutes 60 \
+  --timezone Asia/Shanghai \
+  --reminder-window-from 08:00 \
+  --reminder-window-to 22:00
+
+wechat-wire context-guard set \
+  --message-template '记得回复我一下，不然按当前估算，再过约 {{remaining_minutes}} 分钟，我就暂时没法主动给你发提醒啦。'
+```
+
+The message template supports `{{remaining_minutes}}`, `{{expires_at}}`, and `{{user_id}}`. Agents can inspect or partially update the same settings through `wechat_wire_get_context_guard` and `wechat_wire_configure_context_guard`; no MCP restart is required.
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -98,6 +126,8 @@ Runtime state is intentionally kept under the config directory:
 
 - `credentials.json` — upstream SDK credentials.
 - `users.json` — locally observed users and latest reply context.
+- `context-guard.json` — user-editable expiry reminder policy.
+- `context-guard-state.json` — durable per-user deduplication and scheduling state.
 - `media/YYYY-MM-DD/` — downloaded inbound image, voice, file, and video content.
 
 SDK internals such as base URL, credential path, bot agent, and log level are fixed by `wechat-wire` instead of exposed as public environment variables.

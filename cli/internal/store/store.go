@@ -58,13 +58,14 @@ func ReadCredentials(path string) (*CredentialsInfo, error) {
 
 // UserRecord is one known WeChat user observed through the bot stream.
 type UserRecord struct {
-	UserID           string `json:"user_id"`
-	LastText         string `json:"last_text"`
-	LastType         string `json:"last_type"`
-	LastSeenAt       int64  `json:"last_seen_at"`
-	MessageCount     int    `json:"message_count"`
-	HasContext       bool   `json:"has_context"`
-	LastContextToken string `json:"context_token,omitempty"`
+	UserID            string `json:"user_id"`
+	LastText          string `json:"last_text"`
+	LastType          string `json:"last_type"`
+	LastSeenAt        int64  `json:"last_seen_at"`
+	MessageCount      int    `json:"message_count"`
+	HasContext        bool   `json:"has_context"`
+	LastContextToken  string `json:"context_token,omitempty"`
+	ContextObservedAt int64  `json:"context_observed_at,omitempty"`
 }
 
 // UserBook is the on-disk user index.
@@ -93,6 +94,15 @@ func ReadUserBook(path string) (*UserBook, error) {
 
 // WriteUserBook writes users.json.
 func WriteUserBook(path string, book *UserBook) error {
+	unlock, err := acquireUserBookLock(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return writeUserBook(path, book)
+}
+
+func writeUserBook(path string, book *UserBook) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("creating user dir: %w", err)
 	}
@@ -100,8 +110,27 @@ func WriteUserBook(path string, book *UserBook) error {
 	if err != nil {
 		return fmt.Errorf("marshalling users: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("writing users: %w", err)
+	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temporary user book: %w", err)
+	}
+	tempPath := temp.Name()
+	defer func() {
+		_ = os.Remove(tempPath)
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("chmod temporary user book: %w", err)
+	}
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("writing temporary user book: %w", err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("closing temporary user book: %w", err)
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return fmt.Errorf("replacing user book: %w", err)
 	}
 	return nil
 }
@@ -111,6 +140,12 @@ func RememberUser(path string, msg bot.IncomingMessage) error {
 	if msg.UserID == "" {
 		return fmt.Errorf("message missing user_id")
 	}
+	unlock, err := acquireUserBookLock(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
 	book, err := ReadUserBook(path)
 	if err != nil {
 		return err
@@ -127,16 +162,20 @@ func RememberUser(path string, msg bot.IncomingMessage) error {
 	if msgType == "" {
 		msgType = "text"
 	}
-	record.LastText = msg.Text
-	record.LastType = msgType
-	record.LastSeenAt = ts.Unix()
+	observedUnix := ts.Unix()
+	if record.LastSeenAt == 0 || observedUnix >= record.LastSeenAt {
+		record.LastText = msg.Text
+		record.LastType = msgType
+		record.LastSeenAt = observedUnix
+	}
 	record.MessageCount++
-	if msg.ContextToken != "" {
+	if msg.ContextToken != "" && (record.ContextObservedAt == 0 || observedUnix >= record.ContextObservedAt) {
 		record.HasContext = true
 		record.LastContextToken = msg.ContextToken
+		record.ContextObservedAt = observedUnix
 	}
 	book.Users[msg.UserID] = record
-	return WriteUserBook(path, book)
+	return writeUserBook(path, book)
 }
 
 // ListUsers returns users sorted by most recent message.
@@ -168,8 +207,34 @@ func GetUser(path, userID string) (*UserRecord, bool, error) {
 	return &user, ok, nil
 }
 
+// WithLockedUser reads one user while holding the User Book lock for the
+// callback. The callback must not call another User Book mutator.
+func WithLockedUser(path, userID string, callback func(UserRecord, bool) error) error {
+	if callback == nil {
+		return fmt.Errorf("user callback is required")
+	}
+	unlock, err := acquireUserBookLock(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	book, err := ReadUserBook(path)
+	if err != nil {
+		return err
+	}
+	user, ok := book.Users[userID]
+	return callback(user, ok)
+}
+
 // ForgetUser removes a user from the local user book.
 func ForgetUser(path, userID string) (bool, error) {
+	unlock, err := acquireUserBookLock(path + ".lock")
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+
 	book, err := ReadUserBook(path)
 	if err != nil {
 		return false, err
@@ -178,5 +243,5 @@ func ForgetUser(path, userID string) (bool, error) {
 		return false, nil
 	}
 	delete(book.Users, userID)
-	return true, WriteUserBook(path, book)
+	return true, writeUserBook(path, book)
 }

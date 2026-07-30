@@ -100,6 +100,16 @@ func MediaDir() string {
 	return filepath.Join(Dir(), "media")
 }
 
+// ContextGuardConfigPath returns the proactive context reminder policy path.
+func ContextGuardConfigPath() string {
+	return filepath.Join(Dir(), "context-guard.json")
+}
+
+// ContextGuardStatePath returns the durable at-most-once reminder state path.
+func ContextGuardStatePath() string {
+	return filepath.Join(Dir(), "context-guard-state.json")
+}
+
 // LogLevel returns the fixed SDK log level.
 func LogLevel() string {
 	return "info"
