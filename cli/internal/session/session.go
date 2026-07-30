@@ -22,6 +22,8 @@ var (
 	ErrUserNotObserved = errors.New("user not observed")
 	// ErrContextMissing means the User Book has a user record without a reply context.
 	ErrContextMissing = errors.New("context token missing")
+	// ErrContextChanged means an expected context was replaced before a send.
+	ErrContextChanged = errors.New("context changed")
 )
 
 // Config is the interface to the WeChat Session Module.
@@ -52,6 +54,13 @@ type SendResult struct {
 	Sent   bool   `json:"sent"`
 	UserID string `json:"user_id"`
 	Text   string `json:"text"`
+}
+
+// ContextReference identifies one inbound reply context without relying on the
+// current User Book value.
+type ContextReference struct {
+	Token      string
+	ObservedAt int64
 }
 
 // Attachment describes one local file to send.
@@ -159,6 +168,62 @@ func (s *Session) SendText(ctx context.Context, userID, text string, options ...
 		return nil, err
 	}
 	return &SendResult{Sent: true, UserID: userID, Text: text}, nil
+}
+
+// SendTextForContext validates and uses one exact context while holding the User
+// Book lock, so an inbound refresh cannot replace it between those operations.
+func (s *Session) SendTextForContext(
+	ctx context.Context,
+	userID string,
+	text string,
+	expected ContextReference,
+	options ...SendOption,
+) (*SendResult, error) {
+	if userID == "" {
+		return nil, fmt.Errorf("user_id is required")
+	}
+	if text == "" {
+		return nil, fmt.Errorf("text is required")
+	}
+	if expected.Token == "" || expected.ObservedAt == 0 {
+		return nil, fmt.Errorf("expected context is required")
+	}
+
+	sendConfig := sendConfig{}
+	for _, option := range options {
+		if option != nil {
+			option(&sendConfig)
+		}
+	}
+	client := sendConfig.client
+	if client == nil {
+		client = s.NewClient()
+		if _, err := client.Login(ctx, false); err != nil {
+			return nil, err
+		}
+	}
+
+	var result *SendResult
+	err := store.WithLockedUser(s.usersPath, userID, func(user store.UserRecord, ok bool) error {
+		if !ok {
+			return ErrUserNotObserved
+		}
+		if user.LastContextToken == "" {
+			return ErrContextMissing
+		}
+		if user.LastContextToken != expected.Token || user.ContextObservedAt != expected.ObservedAt {
+			return ErrContextChanged
+		}
+		if err := client.SendWithContext(ctx, userID, text, expected.Token); err != nil {
+			return err
+		}
+		result = &SendResult{Sent: true, UserID: userID, Text: text}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 // SendAttachment uploads and sends a local file to a previously observed user.

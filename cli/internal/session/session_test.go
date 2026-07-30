@@ -87,6 +87,98 @@ func TestSessionSendTextCanReuseExistingClient(t *testing.T) {
 	}
 }
 
+func TestSessionSendTextForContextSerializesInboundRefresh(t *testing.T) {
+	dir := t.TempDir()
+	client := newBlockingSendClient()
+	s := New(Config{UsersPath: filepath.Join(dir, "users.json")})
+	if err := s.RememberMessage(bot.IncomingMessage{
+		UserID:       "user-1",
+		Text:         "old message",
+		Timestamp:    time.Unix(100, 0),
+		ContextToken: "ctx-old",
+	}); err != nil {
+		t.Fatalf("RememberMessage old: %v", err)
+	}
+
+	sendDone := make(chan error, 1)
+	go func() {
+		_, err := s.SendTextForContext(
+			context.Background(),
+			"user-1",
+			"expiry reminder",
+			ContextReference{Token: "ctx-old", ObservedAt: 100},
+			WithClient(client),
+		)
+		sendDone <- err
+	}()
+	select {
+	case <-client.sendStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("context send did not start")
+	}
+
+	refreshDone := make(chan error, 1)
+	go func() {
+		refreshDone <- s.RememberMessage(bot.IncomingMessage{
+			UserID:       "user-1",
+			Text:         "fresh reply",
+			Timestamp:    time.Unix(200, 0),
+			ContextToken: "ctx-new",
+		})
+	}()
+	select {
+	case err := <-refreshDone:
+		t.Fatalf("context refresh completed during guarded send: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(client.releaseSend)
+	if err := <-sendDone; err != nil {
+		t.Fatalf("SendTextForContext: %v", err)
+	}
+	if err := <-refreshDone; err != nil {
+		t.Fatalf("RememberMessage fresh: %v", err)
+	}
+	if client.sentContextToken != "ctx-old" {
+		t.Fatalf("sent context: got %q want ctx-old", client.sentContextToken)
+	}
+
+	user, ok, err := s.GetUser("user-1")
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if !ok || user.LastContextToken != "ctx-new" || user.ContextObservedAt != 200 {
+		t.Fatalf("fresh context was not persisted: %+v", user)
+	}
+}
+
+func TestSessionSendTextForContextRejectsRefreshedCycle(t *testing.T) {
+	dir := t.TempDir()
+	client := &recordingClient{}
+	s := New(Config{UsersPath: filepath.Join(dir, "users.json")})
+	if err := s.RememberMessage(bot.IncomingMessage{
+		UserID:       "user-1",
+		Timestamp:    time.Unix(200, 0),
+		ContextToken: "ctx-new",
+	}); err != nil {
+		t.Fatalf("RememberMessage: %v", err)
+	}
+
+	_, err := s.SendTextForContext(
+		context.Background(),
+		"user-1",
+		"stale reminder",
+		ContextReference{Token: "ctx-old", ObservedAt: 100},
+		WithClient(client),
+	)
+	if !errors.Is(err, ErrContextChanged) {
+		t.Fatalf("error: got %v want ErrContextChanged", err)
+	}
+	if client.sentContextToken != "" {
+		t.Fatalf("stale reminder was sent with context %q", client.sentContextToken)
+	}
+}
+
 func TestSessionSendTextRequiresObservedContext(t *testing.T) {
 	s := New(Config{
 		UsersPath: filepath.Join(t.TempDir(), "users.json"),
@@ -241,3 +333,29 @@ func (c *recordingClient) SendTyping(ctx context.Context, userID string) error {
 func (c *recordingClient) StopTyping(ctx context.Context, userID string) error { return nil }
 
 func (c *recordingClient) Stop() {}
+
+type blockingSendClient struct {
+	recordingClient
+	sendStarted chan struct{}
+	releaseSend chan struct{}
+}
+
+func newBlockingSendClient() *blockingSendClient {
+	return &blockingSendClient{
+		sendStarted: make(chan struct{}),
+		releaseSend: make(chan struct{}),
+	}
+}
+
+func (c *blockingSendClient) SendWithContext(ctx context.Context, userID, text, contextToken string) error {
+	c.sentUserID = userID
+	c.sentText = text
+	c.sentContextToken = contextToken
+	close(c.sendStarted)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.releaseSend:
+		return nil
+	}
+}

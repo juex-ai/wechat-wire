@@ -24,8 +24,15 @@ type RunnerConfig struct {
 	UsersPath    string
 	PollInterval time.Duration
 	Now          func() time.Time
-	Send         func(context.Context, string, string) error
+	Send         func(context.Context, string, string, ContextReference) error
 	OnEvent      func(Event)
+}
+
+// ContextReference identifies the exact inbound context claimed for a reminder.
+// It is kept in memory only; durable state stores a hash.
+type ContextReference struct {
+	Token      string
+	ObservedAt int64
 }
 
 // Event reports a terminal reminder outcome without exposing context tokens.
@@ -48,6 +55,7 @@ type reminderAction struct {
 	UserID             string
 	CycleID            string
 	Text               string
+	Context            ContextReference
 	EstimatedExpiresAt time.Time
 	ReminderAt         time.Time
 }
@@ -208,6 +216,7 @@ func (r *Runner) claimDueReminders(users []store.UserRecord, config Config, now 
 			UserID:             user.UserID,
 			CycleID:            cycleID,
 			Text:               renderMessage(config.MessageTemplate, user.UserID, schedule.EstimatedExpiresAt, now),
+			Context:            ContextReference{Token: user.LastContextToken, ObservedAt: observedUnix},
 			EstimatedExpiresAt: schedule.EstimatedExpiresAt,
 			ReminderAt:         schedule.ReminderAt,
 		})
@@ -227,14 +236,7 @@ func (r *Runner) claimDueReminders(users []store.UserRecord, config Config, now 
 }
 
 func (r *Runner) sendIfCurrent(ctx context.Context, action reminderAction) error {
-	user, ok, err := store.GetUser(r.config.UsersPath, action.UserID)
-	if err != nil {
-		return err
-	}
-	if !ok || contextCycleID(user.UserID, user.LastContextToken, contextObservedAt(*user)) != action.CycleID {
-		return fmt.Errorf("context refreshed before reminder send")
-	}
-	return r.config.Send(ctx, action.UserID, action.Text)
+	return r.config.Send(ctx, action.UserID, action.Text, action.Context)
 }
 
 func (r *Runner) completeAttempt(action reminderAction, sendErr error, completedAt time.Time) error {
@@ -286,10 +288,6 @@ func renderMessage(template, userID string, expiresAt, now time.Time) string {
 func contextCycleID(userID, contextToken string, observedAt int64) string {
 	sum := sha256.Sum256([]byte(userID + "\x00" + contextToken + "\x00" + strconv.FormatInt(observedAt, 10)))
 	return hex.EncodeToString(sum[:12])
-}
-
-func contextObservedAt(user store.UserRecord) int64 {
-	return user.ContextObservedAt
 }
 
 func truncateError(value string) string {

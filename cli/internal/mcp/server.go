@@ -436,8 +436,14 @@ func (s *Server) startContextGuard(ctx context.Context, client bot.Client) {
 		ConfigPath: config.ContextGuardConfigPath(),
 		StatePath:  config.ContextGuardStatePath(),
 		UsersPath:  config.UsersPath(),
-		Send: func(sendCtx context.Context, userID, text string) error {
-			_, err := s.getSessionModule().SendText(sendCtx, userID, text, session.WithClient(client))
+		Send: func(sendCtx context.Context, userID, text string, expected contextguard.ContextReference) error {
+			_, err := s.getSessionModule().SendTextForContext(
+				sendCtx,
+				userID,
+				text,
+				session.ContextReference{Token: expected.Token, ObservedAt: expected.ObservedAt},
+				session.WithClient(client),
+			)
 			return err
 		},
 		OnEvent: s.handleContextGuardEvent,

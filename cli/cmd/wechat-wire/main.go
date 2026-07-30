@@ -165,8 +165,14 @@ func listenCmd() *cobra.Command {
 					ConfigPath: config.ContextGuardConfigPath(),
 					StatePath:  config.ContextGuardStatePath(),
 					UsersPath:  config.UsersPath(),
-					Send: func(sendCtx context.Context, userID, text string) error {
-						_, err := runtime.SendText(sendCtx, userID, text, session.WithClient(client))
+					Send: func(sendCtx context.Context, userID, text string, expected contextguard.ContextReference) error {
+						_, err := runtime.SendTextForContext(
+							sendCtx,
+							userID,
+							text,
+							session.ContextReference{Token: expected.Token, ObservedAt: expected.ObservedAt},
+							session.WithClient(client),
+						)
 						return err
 					},
 					OnEvent: func(event contextguard.Event) {

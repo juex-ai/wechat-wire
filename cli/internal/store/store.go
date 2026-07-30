@@ -204,6 +204,26 @@ func GetUser(path, userID string) (*UserRecord, bool, error) {
 	return &user, ok, nil
 }
 
+// WithLockedUser reads one user while holding the User Book lock for the
+// callback. The callback must not call another User Book mutator.
+func WithLockedUser(path, userID string, callback func(UserRecord, bool) error) error {
+	if callback == nil {
+		return fmt.Errorf("user callback is required")
+	}
+	unlock, err := acquireUserBookLock(path + ".lock")
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	book, err := ReadUserBook(path)
+	if err != nil {
+		return err
+	}
+	user, ok := book.Users[userID]
+	return callback(user, ok)
+}
+
 // ForgetUser removes a user from the local user book.
 func ForgetUser(path, userID string) (bool, error) {
 	unlock, err := acquireUserBookLock(path + ".lock")

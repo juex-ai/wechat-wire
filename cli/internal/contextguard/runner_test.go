@@ -56,7 +56,7 @@ func TestRunnerSendsOnceAndPersistsAttemptAcrossRestart(t *testing.T) {
 			StatePath:  statePath,
 			UsersPath:  usersPath,
 			Now:        func() time.Time { return now },
-			Send: func(ctx context.Context, userID, text string) error {
+			Send: func(ctx context.Context, userID, text string, _ ContextReference) error {
 				sends = append(sends, userID+":"+text)
 				return nil
 			},
@@ -127,7 +127,7 @@ func TestRunnerDoesNotRetryFailedReminderAfterRestart(t *testing.T) {
 			StatePath:  statePath,
 			UsersPath:  usersPath,
 			Now:        func() time.Time { return now },
-			Send: func(ctx context.Context, userID, text string) error {
+			Send: func(ctx context.Context, userID, text string, _ ContextReference) error {
 				attempts++
 				return errors.New("ambiguous network failure")
 			},
@@ -189,7 +189,7 @@ func TestRunnerWaitsForFreshContextObservationForLegacyUser(t *testing.T) {
 		Now: func() time.Time {
 			return time.Date(2026, 7, 30, 11, 0, 0, 0, time.UTC)
 		},
-		Send: func(ctx context.Context, userID, text string) error {
+		Send: func(ctx context.Context, userID, text string, _ ContextReference) error {
 			sends++
 			return nil
 		},
@@ -247,7 +247,7 @@ func TestRunnerSkipsReminderAfterQuietHourDeadline(t *testing.T) {
 		Now: func() time.Time {
 			return time.Date(2026, 7, 30, 22, 5, 0, 0, location)
 		},
-		Send: func(ctx context.Context, userID, text string) error {
+		Send: func(ctx context.Context, userID, text string, _ ContextReference) error {
 			sends++
 			return nil
 		},
@@ -306,7 +306,7 @@ func TestConcurrentRunnersShareOnePersistentClaim(t *testing.T) {
 			StatePath:  statePath,
 			UsersPath:  usersPath,
 			Now:        func() time.Time { return now },
-			Send: func(ctx context.Context, userID, text string) error {
+			Send: func(ctx context.Context, userID, text string, _ ContextReference) error {
 				sends.Add(1)
 				return nil
 			},
@@ -378,7 +378,7 @@ func TestRunnerRearmsAfterFreshInboundContext(t *testing.T) {
 		StatePath:  statePath,
 		UsersPath:  usersPath,
 		Now:        func() time.Time { return now },
-		Send: func(ctx context.Context, userID, text string) error {
+		Send: func(ctx context.Context, userID, text string, _ ContextReference) error {
 			sends++
 			return nil
 		},
