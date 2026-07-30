@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 const DefaultMessageTemplate = "记得回复我一下，不然按当前估算，再过约 {{remaining_minutes}} 分钟，我就暂时没法主动给你发提醒啦。"
+
+var configMu sync.Mutex
 
 // ConfigPatch updates only explicitly supplied context guard settings.
 type ConfigPatch struct {
@@ -57,11 +60,8 @@ func ReadConfig(path string) (Config, error) {
 
 // UpdateConfig applies and persists a partial configuration update.
 func UpdateConfig(path string, patch ConfigPatch) (Config, error) {
-	unlock, err := acquireFileLock(path + ".lock")
-	if err != nil {
-		return Config{}, err
-	}
-	defer unlock()
+	configMu.Lock()
+	defer configMu.Unlock()
 
 	config, err := ReadConfig(path)
 	if err != nil {
