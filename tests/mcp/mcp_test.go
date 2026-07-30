@@ -67,6 +67,21 @@ func TestMCPFakeMessageFlow(t *testing.T) {
 	attachmentResp := server.waitResponse(4)
 	assertNoRPCError(t, attachmentResp)
 	assertToolTextContains(t, attachmentResp, "ok: sent report.txt (19 bytes) to user-1")
+
+	callTool(t, server, 5, "wechat_wire_configure_context_guard", map[string]any{
+		"enabled":           true,
+		"lead_time_minutes": 90,
+		"timezone":          "Asia/Shanghai",
+		"message_template":  "Reply within {{remaining_minutes}} minutes.",
+	})
+	configureResp := server.waitResponse(5)
+	assertNoRPCError(t, configureResp)
+	assertToolTextContains(t, configureResp, `"enabled": true`, `"lead_time_minutes": 90`)
+
+	callTool(t, server, 6, "wechat_wire_get_context_guard", map[string]any{})
+	guardResp := server.waitResponse(6)
+	assertNoRPCError(t, guardResp)
+	assertToolTextContains(t, guardResp, `"timezone": "Asia/Shanghai"`, `"message_template": "Reply within {{remaining_minutes}} minutes."`)
 }
 
 func TestMCPMediaMessageDownloadsToLocalPath(t *testing.T) {
@@ -331,7 +346,7 @@ func assertChannelEvent(t *testing.T, msg rpcMessage, eventType string) {
 	}
 }
 
-func assertToolTextContains(t *testing.T, msg rpcMessage, want string) {
+func assertToolTextContains(t *testing.T, msg rpcMessage, wants ...string) {
 	t.Helper()
 	result, ok := msg["result"].(map[string]any)
 	if !ok {
@@ -349,7 +364,9 @@ func assertToolTextContains(t *testing.T, msg rpcMessage, want string) {
 		}
 		fmt.Fprintf(&joined, "%v\n", obj["text"])
 	}
-	if !strings.Contains(joined.String(), want) {
-		t.Fatalf("tool text missing %q:\n%s", want, joined.String())
+	for _, want := range wants {
+		if !strings.Contains(joined.String(), want) {
+			t.Fatalf("tool text missing %q:\n%s", want, joined.String())
+		}
 	}
 }

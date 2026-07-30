@@ -18,6 +18,7 @@ import (
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
 	"github.com/juex-ai/wechat-wire/cli/internal/config"
+	"github.com/juex-ai/wechat-wire/cli/internal/contextguard"
 	"github.com/juex-ai/wechat-wire/cli/internal/mcp"
 	"github.com/juex-ai/wechat-wire/cli/internal/session"
 	"github.com/juex-ai/wechat-wire/cli/internal/status"
@@ -57,6 +58,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(listenCmd())
 	root.AddCommand(msgCmd())
 	root.AddCommand(userCmd())
+	root.AddCommand(contextGuardCmd())
 	root.AddCommand(mcpCmd())
 
 	return root
@@ -157,9 +159,43 @@ func listenCmd() *cobra.Command {
 			if _, err := client.Login(ctx, false); err != nil {
 				return err
 			}
+			var guard *contextguard.Runner
+			if !once {
+				guard = contextguard.NewRunner(contextguard.RunnerConfig{
+					ConfigPath: config.ContextGuardConfigPath(),
+					StatePath:  config.ContextGuardStatePath(),
+					UsersPath:  config.UsersPath(),
+					Send: func(sendCtx context.Context, userID, text string) error {
+						_, err := runtime.SendText(sendCtx, userID, text, session.WithClient(client))
+						return err
+					},
+					OnEvent: func(event contextguard.Event) {
+						switch event.Type {
+						case contextguard.StatusSent:
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+								"context guard: reminded user_id=%s estimated_expiry=%s\n",
+								event.UserID, event.EstimatedExpiresAt.Format(time.RFC3339))
+						case contextguard.StatusFailed:
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+								"context guard: reminder failed user_id=%s: %v\n",
+								event.UserID, event.Error)
+						case "error":
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "context guard: check failed: %v\n", event.Error)
+						}
+					},
+				})
+				go func() {
+					if err := guard.Run(ctx); err != nil && ctx.Err() == nil {
+						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "context guard: exited: %v\n", err)
+					}
+				}()
+			}
 			client.OnMessage(func(msg *bot.IncomingMessage) {
 				if err := runtime.RememberMessage(*msg); err != nil {
 					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "remember user: %v\n", err)
+				}
+				if guard != nil {
+					guard.Wake()
 				}
 				printMessage(cmd.OutOrStdout(), format, msg)
 				if once {
@@ -379,6 +415,122 @@ func userForgetCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&userID, "user_id", "", "User ID to forget (required)")
+	return cmd
+}
+
+func contextGuardCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "context-guard",
+		Short: "Configure proactive context-token expiry reminders",
+	}
+	cmd.AddCommand(contextGuardShowCmd())
+	cmd.AddCommand(contextGuardSetCmd())
+	return cmd
+}
+
+func contextGuardShowCmd() *cobra.Command {
+	var format string
+	cmd := &cobra.Command{
+		Use:   "show",
+		Short: "Show the context guard configuration",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormat(format, "text", "json"); err != nil {
+				return err
+			}
+			guardConfig, err := contextguard.ReadConfig(config.ContextGuardConfigPath())
+			if err != nil {
+				return err
+			}
+			if format == "json" {
+				return writeJSON(cmd.OutOrStdout(), guardConfig)
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"enabled:              %t\nassumed_ttl_minutes: %d\nlead_time_minutes:   %d\ntimezone:             %s\nreminder_window:      %s-%s\nmessage_template:     %s\n",
+				guardConfig.Enabled,
+				guardConfig.AssumedTTLMinutes,
+				guardConfig.LeadTimeMinutes,
+				guardConfig.Timezone,
+				guardConfig.ReminderWindowFrom,
+				guardConfig.ReminderWindowTo,
+				guardConfig.MessageTemplate,
+			)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text|json")
+	return cmd
+}
+
+func contextGuardSetCmd() *cobra.Command {
+	var enabled bool
+	var assumedTTLMinutes int
+	var leadTimeMinutes int
+	var timezone string
+	var reminderWindowFrom string
+	var reminderWindowTo string
+	var messageTemplate string
+	var format string
+
+	cmd := &cobra.Command{
+		Use:   "set",
+		Short: "Update one or more context guard settings",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateFormat(format, "text", "json"); err != nil {
+				return err
+			}
+			patch := contextguard.ConfigPatch{}
+			changed := false
+			if cmd.Flags().Changed("enabled") {
+				patch.Enabled = &enabled
+				changed = true
+			}
+			if cmd.Flags().Changed("assumed-ttl-minutes") {
+				patch.AssumedTTLMinutes = &assumedTTLMinutes
+				changed = true
+			}
+			if cmd.Flags().Changed("lead-time-minutes") {
+				patch.LeadTimeMinutes = &leadTimeMinutes
+				changed = true
+			}
+			if cmd.Flags().Changed("timezone") {
+				patch.Timezone = &timezone
+				changed = true
+			}
+			if cmd.Flags().Changed("reminder-window-from") {
+				patch.ReminderWindowFrom = &reminderWindowFrom
+				changed = true
+			}
+			if cmd.Flags().Changed("reminder-window-to") {
+				patch.ReminderWindowTo = &reminderWindowTo
+				changed = true
+			}
+			if cmd.Flags().Changed("message-template") {
+				patch.MessageTemplate = &messageTemplate
+				changed = true
+			}
+			if !changed {
+				return fmt.Errorf("at least one context guard setting is required")
+			}
+			guardConfig, err := contextguard.UpdateConfig(config.ContextGuardConfigPath(), patch)
+			if err != nil {
+				return err
+			}
+			if format == "json" {
+				return writeJSON(cmd.OutOrStdout(), guardConfig)
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "context guard updated: enabled=%t lead_time_minutes=%d window=%s-%s\n",
+				guardConfig.Enabled, guardConfig.LeadTimeMinutes, guardConfig.ReminderWindowFrom, guardConfig.ReminderWindowTo)
+			return err
+		},
+	}
+	cmd.Flags().BoolVar(&enabled, "enabled", false, "Enable or disable proactive context expiry reminders")
+	cmd.Flags().IntVar(&assumedTTLMinutes, "assumed-ttl-minutes", 0, "Assumed context token lifetime in minutes")
+	cmd.Flags().IntVar(&leadTimeMinutes, "lead-time-minutes", 0, "How many minutes before estimated expiry to remind")
+	cmd.Flags().StringVar(&timezone, "timezone", "", "IANA timezone used by the reminder window")
+	cmd.Flags().StringVar(&reminderWindowFrom, "reminder-window-from", "", "Earliest local reminder time in HH:MM")
+	cmd.Flags().StringVar(&reminderWindowTo, "reminder-window-to", "", "Latest local reminder time in HH:MM")
+	cmd.Flags().StringVar(&messageTemplate, "message-template", "", "Reminder text; supports {{remaining_minutes}}, {{expires_at}}, and {{user_id}}")
+	cmd.Flags().StringVar(&format, "format", "text", "Output format: text|json")
 	return cmd
 }
 

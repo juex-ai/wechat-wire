@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,16 @@ func TestRememberUserCreatesAndUpdatesUserBook(t *testing.T) {
 		t.Fatalf("RememberUser second: %v", err)
 	}
 
+	third := bot.IncomingMessage{
+		UserID:    "user-1",
+		Text:      "without context",
+		Type:      "text",
+		Timestamp: time.Unix(300, 0),
+	}
+	if err := RememberUser(path, third); err != nil {
+		t.Fatalf("RememberUser third: %v", err)
+	}
+
 	book, err := ReadUserBook(path)
 	if err != nil {
 		t.Fatalf("ReadUserBook: %v", err)
@@ -41,11 +52,14 @@ func TestRememberUserCreatesAndUpdatesUserBook(t *testing.T) {
 	if !ok {
 		t.Fatalf("user not found in book: %+v", book.Users)
 	}
-	if user.LastText != "second" || user.LastType != "image" || user.MessageCount != 2 || user.LastSeenAt != 200 {
+	if user.LastText != "without context" || user.LastType != "text" || user.MessageCount != 3 || user.LastSeenAt != 300 {
 		t.Fatalf("unexpected user record: %+v", user)
 	}
 	if user.LastContextToken != "ctx-2" {
 		t.Fatalf("context token: got %q want %q", user.LastContextToken, "ctx-2")
+	}
+	if user.ContextObservedAt != 200 {
+		t.Fatalf("context observed at: got %d want 200", user.ContextObservedAt)
 	}
 	if !user.HasContext {
 		t.Fatalf("expected HasContext=true")
@@ -72,5 +86,43 @@ func TestForgetUserRemovesUser(t *testing.T) {
 	}
 	if _, ok := book.Users["user-1"]; ok {
 		t.Fatalf("user still present: %+v", book.Users)
+	}
+}
+
+func TestConcurrentRememberUserPreservesEveryMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	const messages = 24
+	start := make(chan struct{})
+	errs := make(chan error, messages)
+	var wait sync.WaitGroup
+
+	for i := range messages {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errs <- RememberUser(path, bot.IncomingMessage{
+				UserID:       "user-1",
+				Text:         "hello",
+				Timestamp:    time.Unix(int64(i+1), 0),
+				ContextToken: "ctx",
+			})
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RememberUser: %v", err)
+		}
+	}
+
+	book, err := ReadUserBook(path)
+	if err != nil {
+		t.Fatalf("ReadUserBook: %v", err)
+	}
+	if got := book.Users["user-1"].MessageCount; got != messages {
+		t.Fatalf("message count: got %d want %d", got, messages)
 	}
 }

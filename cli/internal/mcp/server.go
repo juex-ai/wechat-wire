@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
 	"github.com/juex-ai/wechat-wire/cli/internal/config"
+	"github.com/juex-ai/wechat-wire/cli/internal/contextguard"
 	"github.com/juex-ai/wechat-wire/cli/internal/media"
 	"github.com/juex-ai/wechat-wire/cli/internal/session"
 	"github.com/juex-ai/wechat-wire/cli/internal/status"
@@ -39,6 +41,7 @@ type Server struct {
 	botInit      *botInitAttempt
 	channelReady bool
 	runtime      *session.Session
+	guard        *contextguard.Runner
 }
 
 type botInitAttempt struct {
@@ -79,6 +82,8 @@ Available tools:
 - wechat_wire_send_attachment: send an image, video, or file from a readable local path. The file extension selects the WeChat media type.
 - wechat_wire_send_typing: show or stop the typing indicator for a user.
 - wechat_wire_forget_user: remove a user from the local user book.
+- wechat_wire_get_context_guard: inspect proactive context expiry reminder settings.
+- wechat_wire_configure_context_guard: update the reminder switch, timing window, timezone, or message template.
 `,
 		Capabilities:       s.serverCapabilities(),
 		InitializedHandler: s.onInitialized,
@@ -220,6 +225,64 @@ func (s *Server) registerTools() {
 		}
 		return toolText(fmt.Sprintf("forgot: %s", args.UserID)), nil, nil
 	})
+
+	type getContextGuardArgs struct{}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_get_context_guard",
+		Description: "Show proactive context-token expiry reminder settings. Context tokens are never returned.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args getContextGuardArgs) (*sdkmcp.CallToolResult, any, error) {
+		guardConfig, err := contextguard.ReadConfig(config.ContextGuardConfigPath())
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		text, err := indentedJSON(guardConfig)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		return toolText(text), nil, nil
+	})
+
+	type configureContextGuardArgs struct {
+		Enabled            *bool   `json:"enabled,omitempty" jsonschema:"Enable or disable proactive context expiry reminders"`
+		AssumedTTLMinutes  *int    `json:"assumed_ttl_minutes,omitempty" jsonschema:"Assumed context token lifetime in minutes"`
+		LeadTimeMinutes    *int    `json:"lead_time_minutes,omitempty" jsonschema:"Minutes before estimated expiry to send the reminder"`
+		Timezone           *string `json:"timezone,omitempty" jsonschema:"IANA timezone used by the reminder window, for example Asia/Shanghai"`
+		ReminderWindowFrom *string `json:"reminder_window_from,omitempty" jsonschema:"Earliest local reminder time in HH:MM"`
+		ReminderWindowTo   *string `json:"reminder_window_to,omitempty" jsonschema:"Latest local reminder time in HH:MM; quiet-hour reminders move earlier to this time"`
+		MessageTemplate    *string `json:"message_template,omitempty" jsonschema:"Reminder text supporting {{remaining_minutes}}, {{expires_at}}, and {{user_id}}"`
+	}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_configure_context_guard",
+		Description: "Partially update proactive context expiry reminder settings. Omitted settings remain unchanged.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args configureContextGuardArgs) (*sdkmcp.CallToolResult, any, error) {
+		if args.Enabled == nil &&
+			args.AssumedTTLMinutes == nil &&
+			args.LeadTimeMinutes == nil &&
+			args.Timezone == nil &&
+			args.ReminderWindowFrom == nil &&
+			args.ReminderWindowTo == nil &&
+			args.MessageTemplate == nil {
+			return toolError(fmt.Errorf("at least one context guard setting is required")), nil, nil
+		}
+		guardConfig, err := contextguard.UpdateConfig(config.ContextGuardConfigPath(), contextguard.ConfigPatch{
+			Enabled:            args.Enabled,
+			AssumedTTLMinutes:  args.AssumedTTLMinutes,
+			LeadTimeMinutes:    args.LeadTimeMinutes,
+			Timezone:           args.Timezone,
+			ReminderWindowFrom: args.ReminderWindowFrom,
+			ReminderWindowTo:   args.ReminderWindowTo,
+			MessageTemplate:    args.MessageTemplate,
+		})
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		s.wakeContextGuard()
+		text, err := indentedJSON(guardConfig)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		return toolText(text), nil, nil
+	})
 }
 
 func (s *Server) onInitialized(ctx context.Context, req *sdkmcp.InitializedRequest) {
@@ -228,7 +291,6 @@ func (s *Server) onInitialized(ctx context.Context, req *sdkmcp.InitializedReque
 	s.setChannelReady(allowed)
 	if !allowed {
 		s.log("client did not declare %s capability; notifications disabled", channelCapabilityName)
-		return
 	}
 	s.log("starting WeChat listener")
 	s.startBot(ctx)
@@ -282,6 +344,7 @@ func (s *Server) initializeBot(baseCtx context.Context, attempt *botInitAttempt)
 		s.finishBotInit(attempt, nil, err)
 		return
 	}
+	s.startContextGuard(baseCtx, client)
 	go func() {
 		if err := client.Run(baseCtx); err != nil && baseCtx.Err() == nil {
 			s.log("listener exited: %v", err)
@@ -355,11 +418,55 @@ func (s *Server) handleMessage(ctx context.Context, client bot.Client, msg *bot.
 	if err := s.getSessionModule().RememberMessage(*msg); err != nil {
 		s.log("remember user: %v", err)
 	}
+	s.wakeContextGuard()
 	if isMediaMessage(msg.Type) {
 		go s.downloadAndNotifyMedia(ctx, client, msg)
 		return
 	}
 	s.sendMessageNotification(msg, nil, nil)
+}
+
+func (s *Server) startContextGuard(ctx context.Context, client bot.Client) {
+	s.mu.Lock()
+	if s.guard != nil {
+		s.mu.Unlock()
+		return
+	}
+	guard := contextguard.NewRunner(contextguard.RunnerConfig{
+		ConfigPath: config.ContextGuardConfigPath(),
+		StatePath:  config.ContextGuardStatePath(),
+		UsersPath:  config.UsersPath(),
+		Send: func(sendCtx context.Context, userID, text string) error {
+			_, err := s.getSessionModule().SendText(sendCtx, userID, text, session.WithClient(client))
+			return err
+		},
+		OnEvent: s.handleContextGuardEvent,
+	})
+	s.guard = guard
+	s.mu.Unlock()
+
+	go func() {
+		if err := guard.Run(ctx); err != nil && ctx.Err() == nil {
+			s.log("context guard exited: %v", err)
+		}
+	}()
+}
+
+func (s *Server) handleContextGuardEvent(event contextguard.Event) {
+	switch event.Type {
+	case contextguard.StatusSent:
+		content := fmt.Sprintf(
+			"wechat-wire sent a context expiry reminder to user_id=%s; estimated expiry=%s",
+			event.UserID,
+			event.EstimatedExpiresAt.Format(time.RFC3339),
+		)
+		s.log("%s", content)
+	case contextguard.StatusFailed:
+		content := fmt.Sprintf("wechat-wire context expiry reminder failed for user_id=%s: %v", event.UserID, event.Error)
+		s.log("%s", content)
+	case "error":
+		s.log("context guard check failed: %v", event.Error)
+	}
 }
 
 func (s *Server) downloadAndNotifyMedia(ctx context.Context, client bot.Client, msg *bot.IncomingMessage) {
@@ -508,6 +615,23 @@ func (s *Server) channelAllowed(session *sdkmcp.ServerSession) bool {
 
 func (s *Server) log(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "[wechat-wire] "+format+"\n", args...)
+}
+
+func (s *Server) wakeContextGuard() {
+	s.mu.Lock()
+	guard := s.guard
+	s.mu.Unlock()
+	if guard != nil {
+		guard.Wake()
+	}
+}
+
+func indentedJSON(value any) (string, error) {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode JSON: %w", err)
+	}
+	return string(data), nil
 }
 
 func toolText(text string) *sdkmcp.CallToolResult {
