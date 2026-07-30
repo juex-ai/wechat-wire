@@ -126,3 +126,40 @@ func TestConcurrentRememberUserPreservesEveryMessage(t *testing.T) {
 		t.Fatalf("message count: got %d want %d", got, messages)
 	}
 }
+
+func TestRememberUserDoesNotRegressContextForOutOfOrderMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "users.json")
+	if err := RememberUser(path, bot.IncomingMessage{
+		UserID:       "user-1",
+		Text:         "new message",
+		Type:         "text",
+		Timestamp:    time.Unix(200, 0),
+		ContextToken: "ctx-new",
+	}); err != nil {
+		t.Fatalf("RememberUser new: %v", err)
+	}
+	if err := RememberUser(path, bot.IncomingMessage{
+		UserID:       "user-1",
+		Text:         "old message",
+		Type:         "image",
+		Timestamp:    time.Unix(100, 0),
+		ContextToken: "ctx-old",
+	}); err != nil {
+		t.Fatalf("RememberUser old: %v", err)
+	}
+
+	book, err := ReadUserBook(path)
+	if err != nil {
+		t.Fatalf("ReadUserBook: %v", err)
+	}
+	user := book.Users["user-1"]
+	if user.LastContextToken != "ctx-new" || user.ContextObservedAt != 200 {
+		t.Fatalf("context regressed: %+v", user)
+	}
+	if user.LastSeenAt != 200 || user.LastText != "new message" || user.LastType != "text" {
+		t.Fatalf("last message regressed: %+v", user)
+	}
+	if user.MessageCount != 2 {
+		t.Fatalf("message count: got %d want 2", user.MessageCount)
+	}
+}

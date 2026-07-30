@@ -63,6 +63,8 @@ This keeps the context-token invariant in one implementation: callers do not kno
 
 The bot adapter retains the upstream parsed message only long enough to call the SDK's `Download` method. `cli/internal/media` then persists decrypted bytes under the active config directory with private permissions and sanitized filenames. Protocol download, CDN crypto, and media parsing remain owned by the upstream SDK.
 
+User Book writes are serialized across processes and atomically replace `users.json`. Message counts include every persisted inbound message, while last-message metadata and context observations move forward monotonically so an out-of-order callback cannot restore an older token.
+
 For outbound attachments, the Session module resolves and validates one readable regular file, enforces a 100 MiB memory-safety limit, and passes its bytes plus a base filename to the bot adapter. The adapter sends an optional caption as a separate SDK text reply because iLink media requests accept one item per `item_list`, then calls the upstream SDK's `ReplyContent` and `SendFile` for the file. The SDK routes known image and video extensions to native WeChat media messages and sends other extensions as files.
 
 ## MCP

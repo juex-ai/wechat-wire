@@ -162,14 +162,17 @@ func RememberUser(path string, msg bot.IncomingMessage) error {
 	if msgType == "" {
 		msgType = "text"
 	}
-	record.LastText = msg.Text
-	record.LastType = msgType
-	record.LastSeenAt = ts.Unix()
+	observedUnix := ts.Unix()
+	if record.LastSeenAt == 0 || observedUnix >= record.LastSeenAt {
+		record.LastText = msg.Text
+		record.LastType = msgType
+		record.LastSeenAt = observedUnix
+	}
 	record.MessageCount++
-	if msg.ContextToken != "" {
+	if msg.ContextToken != "" && (record.ContextObservedAt == 0 || observedUnix >= record.ContextObservedAt) {
 		record.HasContext = true
 		record.LastContextToken = msg.ContextToken
-		record.ContextObservedAt = ts.Unix()
+		record.ContextObservedAt = observedUnix
 	}
 	book.Users[msg.UserID] = record
 	return writeUserBook(path, book)
