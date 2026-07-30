@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/juex-ai/wechat-wire/cli/internal/bot"
@@ -15,6 +16,8 @@ import (
 
 // ErrNotLoggedIn is returned when credentials are missing.
 var ErrNotLoggedIn = errors.New("not logged in. run: wechat-wire login")
+
+var userBookMu sync.Mutex
 
 // CredentialsInfo is the subset of the upstream SDK credential file we display.
 type CredentialsInfo struct {
@@ -94,11 +97,8 @@ func ReadUserBook(path string) (*UserBook, error) {
 
 // WriteUserBook writes users.json.
 func WriteUserBook(path string, book *UserBook) error {
-	unlock, err := acquireUserBookLock(path + ".lock")
-	if err != nil {
-		return err
-	}
-	defer unlock()
+	userBookMu.Lock()
+	defer userBookMu.Unlock()
 	return writeUserBook(path, book)
 }
 
@@ -140,11 +140,8 @@ func RememberUser(path string, msg bot.IncomingMessage) error {
 	if msg.UserID == "" {
 		return fmt.Errorf("message missing user_id")
 	}
-	unlock, err := acquireUserBookLock(path + ".lock")
-	if err != nil {
-		return err
-	}
-	defer unlock()
+	userBookMu.Lock()
+	defer userBookMu.Unlock()
 
 	book, err := ReadUserBook(path)
 	if err != nil {
@@ -207,17 +204,14 @@ func GetUser(path, userID string) (*UserRecord, bool, error) {
 	return &user, ok, nil
 }
 
-// WithLockedUser reads one user while holding the User Book lock for the
-// callback. The callback must not call another User Book mutator.
+// WithLockedUser reads one user while holding the process-local User Book
+// mutex for the callback. The callback must not call another User Book mutator.
 func WithLockedUser(path, userID string, callback func(UserRecord, bool) error) error {
 	if callback == nil {
 		return fmt.Errorf("user callback is required")
 	}
-	unlock, err := acquireUserBookLock(path + ".lock")
-	if err != nil {
-		return err
-	}
-	defer unlock()
+	userBookMu.Lock()
+	defer userBookMu.Unlock()
 
 	book, err := ReadUserBook(path)
 	if err != nil {
@@ -229,11 +223,8 @@ func WithLockedUser(path, userID string, callback func(UserRecord, bool) error) 
 
 // ForgetUser removes a user from the local user book.
 func ForgetUser(path, userID string) (bool, error) {
-	unlock, err := acquireUserBookLock(path + ".lock")
-	if err != nil {
-		return false, err
-	}
-	defer unlock()
+	userBookMu.Lock()
+	defer userBookMu.Unlock()
 
 	book, err := ReadUserBook(path)
 	if err != nil {

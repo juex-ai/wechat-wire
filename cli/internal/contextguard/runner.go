@@ -142,12 +142,6 @@ func (r *Runner) Check(ctx context.Context) error {
 }
 
 func (r *Runner) claimDueReminders(users []store.UserRecord, config Config, now time.Time) ([]reminderAction, error) {
-	unlock, err := acquireFileLock(r.config.StatePath + ".lock")
-	if err != nil {
-		return nil, err
-	}
-	defer unlock()
-
 	state, err := ReadState(r.config.StatePath)
 	if err != nil {
 		return nil, err
@@ -240,12 +234,6 @@ func (r *Runner) sendIfCurrent(ctx context.Context, action reminderAction) error
 }
 
 func (r *Runner) completeAttempt(action reminderAction, sendErr error, completedAt time.Time) error {
-	unlock, err := acquireFileLock(r.config.StatePath + ".lock")
-	if err != nil {
-		return err
-	}
-	defer unlock()
-
 	state, err := ReadState(r.config.StatePath)
 	if err != nil {
 		return err

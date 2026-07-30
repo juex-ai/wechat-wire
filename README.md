@@ -96,8 +96,10 @@ For direct CLI sends, `wechat-wire listen` records the latest context token for 
 
 The optional context expiry guard sends one direct reminder before the latest observed context token is expected to expire. It is disabled by default because iLink does not provide an authoritative expiry timestamp; the default policy estimates a 24-hour lifetime and reminds 60 minutes before expiry.
 
-Only an inbound user message carrying a context token starts a fresh cycle. Sending the reminder does not extend the cycle. Each cycle is durably claimed before sending so process restarts and concurrent `listen`/`mcp` processes do not send duplicates.
+Only an inbound user message carrying a context token starts a fresh cycle. Sending the reminder does not extend the cycle. A fresh inbound context replaces any unsent reminder schedule with one calculated from the new observation time.
 Existing user records created by older `wechat-wire` versions have no trustworthy context observation time and remain unscheduled until the next token-bearing inbound message.
+
+Reminder schedules and terminal attempts are persisted in `context-guard-state.json`. A reminder that was already attempted is not sent again after a process restart, while a reminder that is still scheduled resumes and sends when it becomes due. The attempt is persisted before network I/O, so an interruption during an ambiguous send favors avoiding a duplicate over retrying.
 
 Reminders are restricted to a local-time window, defaulting to `08:00` through `22:00`. If the normal reminder time falls outside the window, it moves earlier to the most recent window end. For example, a token estimated to expire at `03:00` is reminded at `22:00` the previous evening. If the service misses that window, it records the cycle as skipped and does not send a late-night catch-up.
 
@@ -129,6 +131,8 @@ Runtime state is intentionally kept under the config directory:
 - `context-guard.json` — user-editable expiry reminder policy.
 - `context-guard-state.json` — durable per-user deduplication and scheduling state.
 - `media/YYYY-MM-DD/` — downloaded inbound image, voice, file, and video content.
+
+State files are written through atomic replacement and do not use sidecar `.lock` files. Run only one long-lived `listen` or `mcp` process for a config directory at a time.
 
 SDK internals such as base URL, credential path, bot agent, and log level are fixed by `wechat-wire` instead of exposed as public environment variables.
 
