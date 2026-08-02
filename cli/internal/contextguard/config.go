@@ -10,7 +10,9 @@ import (
 	"time"
 )
 
-const DefaultMessageTemplate = "记得回复我一下，不然按当前估算，再过约 {{remaining_minutes}} 分钟，我就暂时没法主动给你发提醒啦。"
+const DefaultMessageTemplate = `记得回复我一下，不然 {{remaining_minutes}} 分钟之后，我就没法主动给你发提醒啦。
+原因是微信的防打扰限制，用户发消息后的24小时内，AI 才能给用户发消息。
+如果要关闭这个提醒，也可以直接跟我说。`
 
 var configMu sync.Mutex
 
@@ -25,10 +27,10 @@ type ConfigPatch struct {
 	MessageTemplate    *string
 }
 
-// DefaultConfig returns the conservative opt-in context guard policy.
+// DefaultConfig returns the default context guard policy.
 func DefaultConfig() Config {
 	return Config{
-		Enabled:            false,
+		Enabled:            true,
 		AssumedTTLMinutes:  24 * 60,
 		LeadTimeMinutes:    60,
 		Timezone:           "Local",
