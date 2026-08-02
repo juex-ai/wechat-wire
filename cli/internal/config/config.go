@@ -13,58 +13,51 @@ const (
 )
 
 var (
-	homeDirConfigured bool
-	configDir         string
+	dirConfigured bool
+	configDir     string
 )
 
-// SetHomeDir configures the active config directory from --homedir.
-func SetHomeDir(homeDir string) error {
-	homeDirConfigured = false
+// SetDirOverride configures the active config directory from --homedir.
+func SetDirOverride(dir string) error {
+	dirConfigured = false
 	configDir = ""
-	if homeDir == "" {
+	if dir == "" {
 		return nil
 	}
 
-	dir, err := ResolveDir(homeDir)
+	resolved, err := ResolveDir(dir)
 	if err != nil {
 		return err
 	}
-	homeDirConfigured = true
-	configDir = dir
+	dirConfigured = true
+	configDir = resolved
 	return nil
 }
 
-// ResolveDir returns the wechat-wire config directory from --homedir,
-// WECHAT_WIRE_DIR, or the current user's home directory.
-func ResolveDir(homeDir string) (string, error) {
-	base := homeDir
-	rejectParentTraversal := homeDir != ""
-	if base == "" {
-		base = os.Getenv("WECHAT_WIRE_DIR")
-	}
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			base = "."
-		} else {
-			base = home
+// ResolveDir returns an explicit --homedir or WECHAT_WIRE_DIR unchanged after
+// path normalization. Without either override it returns ~/.config/wechat-wire.
+func ResolveDir(dirOverride string) (string, error) {
+	if dirOverride != "" {
+		if hasParentTraversal(dirOverride) && !filepath.IsAbs(dirOverride) {
+			return "", fmt.Errorf("--homedir relative path must not contain '..': %s", dirOverride)
 		}
+		return absolutePath(dirOverride)
 	}
 
-	if rejectParentTraversal && hasParentTraversal(base) && !filepath.IsAbs(base) {
-		return "", fmt.Errorf("--homedir relative path must not contain '..': %s", base)
+	if envDir := os.Getenv("WECHAT_WIRE_DIR"); envDir != "" {
+		return absolutePath(envDir)
 	}
 
-	absBase, err := absolutePath(base)
+	home, err := os.UserHomeDir()
 	if err != nil {
-		return "", err
+		home = "."
 	}
-	return appendConfigApp(absBase), nil
+	return absolutePath(filepath.Join(home, ".config", appName))
 }
 
 // Dir returns the active config directory.
 func Dir() string {
-	if homeDirConfigured {
+	if dirConfigured {
 		return configDir
 	}
 	dir, err := ResolveDir("")
@@ -76,7 +69,7 @@ func Dir() string {
 
 // DirSource returns which input selected the active config directory.
 func DirSource() string {
-	if homeDirConfigured {
+	if dirConfigured {
 		return "flag"
 	}
 	if os.Getenv("WECHAT_WIRE_DIR") != "" {
@@ -132,17 +125,6 @@ func absolutePath(path string) (string, error) {
 		return "", fmt.Errorf("resolving path %s: %w", path, err)
 	}
 	return abs, nil
-}
-
-func appendConfigApp(path string) string {
-	clean := filepath.Clean(path)
-	if filepath.Base(clean) == appName && filepath.Base(filepath.Dir(clean)) == ".config" {
-		return clean
-	}
-	if filepath.Base(clean) == ".config" {
-		return filepath.Join(clean, appName)
-	}
-	return filepath.Join(clean, ".config", appName)
 }
 
 func hasParentTraversal(path string) bool {

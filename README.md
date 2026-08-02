@@ -128,7 +128,9 @@ The message template supports `{{remaining_minutes}}`, `{{assumed_ttl}}`, `{{exp
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `WECHAT_WIRE_DIR` | `$HOME/.config/wechat-wire` | Base config directory input; normalized to `.config/wechat-wire`. |
+| `WECHAT_WIRE_DIR` | `$HOME/.config/wechat-wire` | Final config directory; overridden by `--homedir`. |
+
+`--homedir` and `WECHAT_WIRE_DIR` are explicit final directories. For example, `--homedir /tmp/wechat-test` stores credentials at `/tmp/wechat-test/credentials.json`. When neither is set, `wechat-wire` uses `$HOME/.config/wechat-wire`.
 
 Runtime state is intentionally kept under the config directory:
 

@@ -40,17 +40,17 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
-	var homeDir string
+	var configDir string
 
 	root := &cobra.Command{
 		Use:          "wechat-wire",
 		Short:        "wechat-wire — WeChat iLink Bot CLI and MCP bridge",
 		SilenceUsage: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return config.SetHomeDir(homeDir)
+			return config.SetDirOverride(configDir)
 		},
 	}
-	root.PersistentFlags().StringVar(&homeDir, "homedir", "", "Base directory for wechat-wire config; final path is .config/wechat-wire")
+	root.PersistentFlags().StringVar(&configDir, "homedir", "", "Config directory override")
 
 	root.AddCommand(versionCmd())
 	root.AddCommand(statusCmd())

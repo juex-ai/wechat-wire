@@ -1,11 +1,12 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestResolveDirUsesHomeDirFlagBeforeEnv(t *testing.T) {
+func TestResolveDirUsesFlagDirectoryBeforeEnv(t *testing.T) {
 	envRoot := t.TempDir()
 	flagRoot := t.TempDir()
 	t.Setenv("WECHAT_WIRE_DIR", envRoot)
@@ -14,13 +15,13 @@ func TestResolveDirUsesHomeDirFlagBeforeEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveDir: %v", err)
 	}
-	want := filepath.Join(flagRoot, ".config", "wechat-wire")
+	want := flagRoot
 	if got != want {
 		t.Fatalf("ResolveDir: got %q want %q", got, want)
 	}
 }
 
-func TestResolveDirNormalizesConfigDir(t *testing.T) {
+func TestResolveDirUsesEnvironmentDirectoryDirectly(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WECHAT_WIRE_DIR", root)
 
@@ -28,21 +29,24 @@ func TestResolveDirNormalizesConfigDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveDir: %v", err)
 	}
-	want := filepath.Join(root, ".config", "wechat-wire")
+	want := root
 	if got != want {
 		t.Fatalf("ResolveDir: got %q want %q", got, want)
 	}
 }
 
-func TestResolveDirKeepsExistingConfigDir(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("WECHAT_WIRE_DIR", filepath.Join(root, ".config", "wechat-wire"))
+func TestResolveDirDefaultsToUserConfigDirectory(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_DIR", "")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
 
 	got, err := ResolveDir("")
 	if err != nil {
 		t.Fatalf("ResolveDir: %v", err)
 	}
-	want := filepath.Join(root, ".config", "wechat-wire")
+	want := filepath.Join(home, ".config", "wechat-wire")
 	if got != want {
 		t.Fatalf("ResolveDir: got %q want %q", got, want)
 	}
@@ -60,15 +64,15 @@ func TestResolveDirRejectsRelativeHomeDirWithParentTraversal(t *testing.T) {
 func TestCredentialPathStaysUnderConfigDir(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("WECHAT_WIRE_CRED_PATH", filepath.Join(t.TempDir(), "credentials.json"))
-	if err := SetHomeDir(root); err != nil {
-		t.Fatalf("SetHomeDir: %v", err)
+	if err := SetDirOverride(root); err != nil {
+		t.Fatalf("SetDirOverride: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = SetHomeDir("")
+		_ = SetDirOverride("")
 	})
 
 	got := CredentialPath()
-	want := filepath.Join(root, ".config", "wechat-wire", "credentials.json")
+	want := filepath.Join(root, "credentials.json")
 	if got != want {
 		t.Fatalf("CredentialPath: got %q want %q", got, want)
 	}

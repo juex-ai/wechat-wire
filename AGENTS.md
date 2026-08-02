@@ -16,7 +16,7 @@ For product overview and quick start, see `README.md`. For architecture internal
 ## Conventions
 
 - Use the upstream MIT SDK `github.com/corespeed-io/wechatbot/golang` for iLink Bot protocol behavior. Do not reimplement raw iLink HTTP/auth/crypto unless the SDK API is insufficient and the tradeoff is documented first.
-- CLI config uses `--homedir`, then `WECHAT_WIRE_DIR`, then the current home directory. The final directory is normalized to `.config/wechat-wire`.
+- CLI config precedence is `--homedir`, then `WECHAT_WIRE_DIR`, then the default `$HOME/.config/wechat-wire`. Explicit flag and environment values are final config directories and must not have path segments appended.
 - SDK credentials live at `<config-dir>/credentials.json`. Do not add SDK-level environment variables unless there is a product requirement for the user-facing configuration.
 - The local user book lives at `<config-dir>/users.json`; it stores observed user IDs, last-message metadata, and the latest context token used by `msg send`. Treat it as private local runtime state.
 - Context expiry reminders are enabled by default and configured in `<config-dir>/context-guard.json`; users can disable them through CLI or MCP. Durable attempts live in `context-guard-state.json`. Preserve at-most-once behavior across restarts, keep unsent schedules active after restart, and never persist a raw token in reminder state.
