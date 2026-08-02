@@ -209,7 +209,7 @@ func (r *Runner) claimDueReminders(users []store.UserRecord, config Config, now 
 		actions = append(actions, reminderAction{
 			UserID:             user.UserID,
 			CycleID:            cycleID,
-			Text:               renderMessage(config.MessageTemplate, user.UserID, schedule.EstimatedExpiresAt, now),
+			Text:               renderMessage(config.MessageTemplate, user.UserID, schedule.EstimatedExpiresAt, now, config.AssumedTTLMinutes),
 			Context:            ContextReference{Token: user.LastContextToken, ObservedAt: observedUnix},
 			EstimatedExpiresAt: schedule.EstimatedExpiresAt,
 			ReminderAt:         schedule.ReminderAt,
@@ -261,7 +261,7 @@ func reminderDeadline(reminderAt time.Time, config Config) time.Time {
 	return time.Date(local.Year(), local.Month(), local.Day(), hour, minute, 59, int(time.Second-time.Nanosecond), location)
 }
 
-func renderMessage(template, userID string, expiresAt, now time.Time) string {
+func renderMessage(template, userID string, expiresAt, now time.Time, assumedTTLMinutes int) string {
 	remainingMinutes := int(math.Ceil(expiresAt.Sub(now).Minutes()))
 	if remainingMinutes < 0 {
 		remainingMinutes = 0
@@ -269,8 +269,16 @@ func renderMessage(template, userID string, expiresAt, now time.Time) string {
 	return strings.NewReplacer(
 		"{{remaining_minutes}}", strconv.Itoa(remainingMinutes),
 		"{{expires_at}}", expiresAt.Format("2006-01-02 15:04 MST"),
+		"{{assumed_ttl}}", formatAssumedTTL(assumedTTLMinutes),
 		"{{user_id}}", userID,
 	).Replace(template)
+}
+
+func formatAssumedTTL(minutes int) string {
+	if minutes%60 == 0 {
+		return strconv.Itoa(minutes/60) + "小时"
+	}
+	return strconv.Itoa(minutes) + "分钟"
 }
 
 func contextCycleID(userID, contextToken string, observedAt int64) string {

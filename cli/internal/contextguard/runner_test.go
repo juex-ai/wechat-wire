@@ -503,3 +503,16 @@ func TestRunnerReschedulesUnsentReminderAfterFreshInboundContext(t *testing.T) {
 		t.Fatalf("unexpected reminder context: %+v", sentContext)
 	}
 }
+
+func TestRenderDefaultMessageUsesConfiguredAssumedTTL(t *testing.T) {
+	now := time.Date(2026, 8, 3, 10, 0, 0, 0, time.UTC)
+	expiresAt := now.Add(12 * time.Hour)
+
+	message := renderMessage(DefaultMessageTemplate, "user-1", expiresAt, now, 12*60)
+	if !strings.Contains(message, "用户发消息后的12小时内") {
+		t.Fatalf("message does not use configured TTL: %q", message)
+	}
+	if strings.Contains(message, "24小时") {
+		t.Fatalf("message contains stale default TTL: %q", message)
+	}
+}

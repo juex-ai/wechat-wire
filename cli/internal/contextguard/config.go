@@ -11,7 +11,7 @@ import (
 )
 
 const DefaultMessageTemplate = `记得回复我一下，不然 {{remaining_minutes}} 分钟之后，我就没法主动给你发提醒啦。
-原因是微信的防打扰限制，用户发消息后的24小时内，AI 才能给用户发消息。
+原因是微信的防打扰限制，用户发消息后的{{assumed_ttl}}内，AI 才能给用户发消息。
 如果要关闭这个提醒，也可以直接跟我说。`
 
 var configMu sync.Mutex

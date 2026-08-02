@@ -122,7 +122,7 @@ The default message is:
 如果要关闭这个提醒，也可以直接跟我说。
 ```
 
-The message template supports `{{remaining_minutes}}`, `{{expires_at}}`, and `{{user_id}}`. Agents can inspect, disable, or partially update the same settings through `wechat_wire_get_context_guard` and `wechat_wire_configure_context_guard`; no MCP restart is required.
+The message template supports `{{remaining_minutes}}`, `{{assumed_ttl}}`, `{{expires_at}}`, and `{{user_id}}`. `{{assumed_ttl}}` renders the configured estimate as hours or minutes, so the default message stays consistent when the assumed TTL changes. Agents can inspect, disable, or partially update the same settings through `wechat_wire_get_context_guard` and `wechat_wire_configure_context_guard`; no MCP restart is required.
 
 ## Configuration
 
