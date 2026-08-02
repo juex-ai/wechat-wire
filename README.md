@@ -94,7 +94,7 @@ For direct CLI sends, `wechat-wire listen` records the latest context token for 
 
 ## Context Expiry Guard
 
-The optional context expiry guard sends one direct reminder before the latest observed context token is expected to expire. It is disabled by default because iLink does not provide an authoritative expiry timestamp; the default policy estimates a 24-hour lifetime and reminds 60 minutes before expiry.
+The context expiry guard is enabled by default and sends one direct reminder before the latest observed context token is expected to expire. iLink does not provide an authoritative expiry timestamp, so the default policy estimates a 24-hour lifetime and reminds 60 minutes before expiry.
 
 Only an inbound user message carrying a context token starts a fresh cycle. Sending the reminder does not extend the cycle. A fresh inbound context replaces any unsent reminder schedule with one calculated from the new observation time.
 Existing user records created by older `wechat-wire` versions have no trustworthy context observation time and remain unscheduled until the next token-bearing inbound message.
@@ -105,18 +105,24 @@ Reminders are restricted to a local-time window, defaulting to `08:00` through `
 
 ```bash
 wechat-wire context-guard set \
-  --enabled=true \
   --assumed-ttl-minutes 1440 \
   --lead-time-minutes 60 \
   --timezone Asia/Shanghai \
   --reminder-window-from 08:00 \
   --reminder-window-to 22:00
 
-wechat-wire context-guard set \
-  --message-template '记得回复我一下，不然按当前估算，再过约 {{remaining_minutes}} 分钟，我就暂时没法主动给你发提醒啦。'
+wechat-wire context-guard set --enabled=false
 ```
 
-The message template supports `{{remaining_minutes}}`, `{{expires_at}}`, and `{{user_id}}`. Agents can inspect or partially update the same settings through `wechat_wire_get_context_guard` and `wechat_wire_configure_context_guard`; no MCP restart is required.
+The default message is:
+
+```text
+记得回复我一下，不然 {{remaining_minutes}} 分钟之后，我就没法主动给你发提醒啦。
+原因是微信的防打扰限制，用户发消息后的24小时内，AI 才能给用户发消息。
+如果要关闭这个提醒，也可以直接跟我说。
+```
+
+The message template supports `{{remaining_minutes}}`, `{{assumed_ttl}}`, `{{expires_at}}`, and `{{user_id}}`. `{{assumed_ttl}}` renders the configured estimate as hours or minutes, so the default message stays consistent when the assumed TTL changes. Agents can inspect, disable, or partially update the same settings through `wechat_wire_get_context_guard` and `wechat_wire_configure_context_guard`; no MCP restart is required.
 
 ## Configuration
 

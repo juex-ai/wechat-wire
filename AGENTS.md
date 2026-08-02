@@ -19,7 +19,7 @@ For product overview and quick start, see `README.md`. For architecture internal
 - CLI config uses `--homedir`, then `WECHAT_WIRE_DIR`, then the current home directory. The final directory is normalized to `.config/wechat-wire`.
 - SDK credentials live at `<config-dir>/credentials.json`. Do not add SDK-level environment variables unless there is a product requirement for the user-facing configuration.
 - The local user book lives at `<config-dir>/users.json`; it stores observed user IDs, last-message metadata, and the latest context token used by `msg send`. Treat it as private local runtime state.
-- Context expiry reminders are opt-in and configured in `<config-dir>/context-guard.json`; durable attempts live in `context-guard-state.json`. Preserve at-most-once behavior across restarts, keep unsent schedules active after restart, and never persist a raw token in reminder state.
+- Context expiry reminders are enabled by default and configured in `<config-dir>/context-guard.json`; users can disable them through CLI or MCP. Durable attempts live in `context-guard-state.json`. Preserve at-most-once behavior across restarts, keep unsent schedules active after restart, and never persist a raw token in reminder state.
 - Only inbound messages carrying a context token refresh `context_observed_at`. Outbound sends must not extend the estimated context lifetime.
 - A fresh token-bearing inbound message must replace an unsent reminder schedule with a new schedule based on the fresh observation time.
 - Keep `last_seen_at` and `context_observed_at` monotonic when callbacks deliver out-of-order messages.

@@ -12,8 +12,8 @@ func TestReadConfigReturnsSafeDefaultsWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadConfig: %v", err)
 	}
-	if config.Enabled {
-		t.Fatal("context guard should be disabled by default")
+	if !config.Enabled {
+		t.Fatal("context guard should be enabled by default")
 	}
 	if config.AssumedTTLMinutes != 24*60 || config.LeadTimeMinutes != 60 {
 		t.Fatalf("unexpected timing defaults: %+v", config)
@@ -21,8 +21,8 @@ func TestReadConfigReturnsSafeDefaultsWhenMissing(t *testing.T) {
 	if config.ReminderWindowFrom != "08:00" || config.ReminderWindowTo != "22:00" {
 		t.Fatalf("unexpected reminder window: %+v", config)
 	}
-	if config.MessageTemplate == "" {
-		t.Fatal("default message template is empty")
+	if config.MessageTemplate != DefaultMessageTemplate {
+		t.Fatalf("unexpected default message template: %q", config.MessageTemplate)
 	}
 }
 

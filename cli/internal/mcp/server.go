@@ -249,7 +249,7 @@ func (s *Server) registerTools() {
 		Timezone           *string `json:"timezone,omitempty" jsonschema:"IANA timezone used by the reminder window, for example Asia/Shanghai"`
 		ReminderWindowFrom *string `json:"reminder_window_from,omitempty" jsonschema:"Earliest local reminder time in HH:MM"`
 		ReminderWindowTo   *string `json:"reminder_window_to,omitempty" jsonschema:"Latest local reminder time in HH:MM; quiet-hour reminders move earlier to this time"`
-		MessageTemplate    *string `json:"message_template,omitempty" jsonschema:"Reminder text supporting {{remaining_minutes}}, {{expires_at}}, and {{user_id}}"`
+		MessageTemplate    *string `json:"message_template,omitempty" jsonschema:"Reminder text supporting {{remaining_minutes}}, {{assumed_ttl}}, {{expires_at}}, and {{user_id}}"`
 	}
 	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
 		Name:        "wechat_wire_configure_context_guard",

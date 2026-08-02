@@ -535,7 +535,7 @@ func contextGuardSetCmd() *cobra.Command {
 	cmd.Flags().StringVar(&timezone, "timezone", "", "IANA timezone used by the reminder window")
 	cmd.Flags().StringVar(&reminderWindowFrom, "reminder-window-from", "", "Earliest local reminder time in HH:MM")
 	cmd.Flags().StringVar(&reminderWindowTo, "reminder-window-to", "", "Latest local reminder time in HH:MM")
-	cmd.Flags().StringVar(&messageTemplate, "message-template", "", "Reminder text; supports {{remaining_minutes}}, {{expires_at}}, and {{user_id}}")
+	cmd.Flags().StringVar(&messageTemplate, "message-template", "", "Reminder text; supports {{remaining_minutes}}, {{assumed_ttl}}, {{expires_at}}, and {{user_id}}")
 	cmd.Flags().StringVar(&format, "format", "text", "Output format: text|json")
 	return cmd
 }
