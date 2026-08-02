@@ -130,7 +130,7 @@ func TestMCPMediaMessageDownloadsToLocalPath(t *testing.T) {
 	if !filepath.IsAbs(localPath) {
 		t.Fatalf("local_path is not absolute: %q", localPath)
 	}
-	mediaDir := filepath.Join(dataDir, ".config", "wechat-wire", "media")
+	mediaDir := filepath.Join(dataDir, "media")
 	rel, err := filepath.Rel(mediaDir, localPath)
 	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
 		t.Fatalf("local_path %q is outside media dir %q", localPath, mediaDir)

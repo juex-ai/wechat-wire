@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -46,7 +45,7 @@ func TestStatusShowsRuntimeConfig(t *testing.T) {
 	for _, want := range []string{
 		"version:",
 		"work_dir(env):",
-		filepath.Join(dir, ".config", "wechat-wire"),
+		dir,
 		"credentials:",
 		"users:",
 	} {
