@@ -69,11 +69,12 @@ For outbound attachments, the Session module resolves and validates one readable
 
 ## MCP
 
-The MCP server logs in through the same SDK adapter and starts the message listener after MCP initialization. Incoming WeChat messages are recorded in the local user book and forwarded as `notifications/claude/channel` notifications when supported. Media messages are downloaded asynchronously so CDN I/O does not block the listener; their notifications contain an absolute local path in both human-readable metadata and the native `attachments` array after persistence completes. When SDK login needs QR scanning, the MCP server sends a `login_required` channel notification with the QR URL before continuing the login flow.
+The MCP server logs in through the same SDK adapter and starts the message listener after MCP initialization. Incoming WeChat messages are recorded in the local user book and forwarded as `notifications/claude/channel` notifications when supported. Media messages are downloaded asynchronously so CDN I/O does not block the listener; their notifications contain an absolute local path in both human-readable metadata and the native `attachments` array after persistence completes. When SDK login needs QR scanning, the MCP server sends a `login_required` channel notification with the QR URL before continuing the login flow. `wechat_wire_login` starts or joins that login attempt and returns as soon as the current QR or scan state is available.
 
 Tools:
 
 - `wechat_wire_status`
+- `wechat_wire_login`
 - `wechat_wire_list_users`
 - `wechat_wire_send_message`
 - `wechat_wire_send_attachment`

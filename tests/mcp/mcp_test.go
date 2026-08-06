@@ -82,6 +82,11 @@ func TestMCPFakeMessageFlow(t *testing.T) {
 	guardResp := server.waitResponse(6)
 	assertNoRPCError(t, guardResp)
 	assertToolTextContains(t, guardResp, `"timezone": "Asia/Shanghai"`, `"message_template": "Reply within {{remaining_minutes}} minutes."`)
+
+	callTool(t, server, 7, "wechat_wire_login", map[string]any{})
+	loginResp := server.waitResponse(7)
+	assertNoRPCError(t, loginResp)
+	assertToolTextContains(t, loginResp, "login_state: logged_in", "login_action: no action required")
 }
 
 func TestMCPMediaMessageDownloadsToLocalPath(t *testing.T) {

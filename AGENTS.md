@@ -31,6 +31,7 @@ For product overview and quick start, see `README.md`. For architecture internal
 - Use the upstream SDK's `ReplyContent`/`SendFile` path for outbound attachments. Do not duplicate CDN upload, encryption, or media-type routing.
 - Build metadata is injected with `-ldflags` into `main.version` and `main.commit`.
 - MCP message notifications use `notifications/claude/channel` when the client advertises experimental `claude/channel`, or when `wechat-wire mcp --channel` is used.
+- `wechat_wire_login` starts or joins the MCP login attempt and returns the current QR or scan state without waiting for the user to finish scanning.
 
 ## Development Workflow
 
