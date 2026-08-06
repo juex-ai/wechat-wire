@@ -24,6 +24,7 @@ import (
 
 const channelCapabilityName = "claude/channel"
 const mediaDownloadTimeout = 2 * time.Minute
+const loginPromptTimeout = 10 * time.Second
 
 // Server is the MCP stdio bridge for WeChat iLink Bot messages.
 type Server struct {
@@ -35,19 +36,28 @@ type Server struct {
 	forceChannel bool
 	factory      bot.Factory
 
-	mu           sync.Mutex
-	runCtx       context.Context
-	botClient    bot.Client
-	botInit      *botInitAttempt
-	channelReady bool
-	runtime      *session.Session
-	guard        *contextguard.Runner
+	mu            sync.Mutex
+	runCtx        context.Context
+	botClient     bot.Client
+	botInit       *botInitAttempt
+	channelReady  bool
+	loginState    loginState
+	loginNotified bool
+	runtime       *session.Session
+	guard         *contextguard.Runner
 }
 
 type botInitAttempt struct {
-	done   chan struct{}
-	client bot.Client
-	err    error
+	done       chan struct{}
+	loginReady chan struct{}
+	loginOnce  sync.Once
+	client     bot.Client
+	err        error
+}
+
+type loginState struct {
+	EventType string
+	Content   string
 }
 
 // NewServer creates an MCP server.
@@ -76,7 +86,8 @@ func (s *Server) Run(ctx context.Context) error {
 Incoming WeChat messages arrive as channel notifications when the client supports the experimental claude/channel capability or the server is started with --channel.
 
 Available tools:
-- wechat_wire_status: inspect runtime status.
+- wechat_wire_status: inspect runtime and current login status.
+- wechat_wire_login: start login or return the current QR login prompt without waiting for the user to scan.
 - wechat_wire_list_users: list locally observed WeChat users.
 - wechat_wire_send_message: send a text message to a user. The active MCP process must have received context for that user from WeChat first.
 - wechat_wire_send_attachment: send an image, video, or file from a readable local path. The file extension selects the WeChat media type.
@@ -98,9 +109,21 @@ func (s *Server) registerTools() {
 	type statusArgs struct{}
 	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
 		Name:        "wechat_wire_status",
-		Description: "Show current wechat-wire version, work directory, credential path, login status, and known user count.",
+		Description: "Show current wechat-wire version, work directory, credential path, login guidance, and known user count.",
 	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args statusArgs) (*sdkmcp.CallToolResult, any, error) {
-		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: status.Runtime(s.version)}}}, nil, nil
+		return toolText(s.runtimeStatus()), nil, nil
+	})
+
+	type loginArgs struct{}
+	sdkmcp.AddTool(s.mcpServer, &sdkmcp.Tool{
+		Name:        "wechat_wire_login",
+		Description: "Start WeChat QR login or return the current login prompt. Returns when a QR URL is available; it does not wait for the user to scan.",
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, args loginArgs) (*sdkmcp.CallToolResult, any, error) {
+		text, err := s.login(ctx)
+		if err != nil {
+			return toolError(err), nil, nil
+		}
+		return toolText(text), nil, nil
 	})
 
 	type listUsersArgs struct{}
@@ -137,7 +160,7 @@ func (s *Server) registerTools() {
 		if args.Text == "" {
 			return toolError(fmt.Errorf("text is required")), nil, nil
 		}
-		client, err := s.ensureBot(ctx)
+		client, err := s.botForTool(ctx)
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -164,7 +187,7 @@ func (s *Server) registerTools() {
 		if args.Path == "" {
 			return toolError(fmt.Errorf("path is required")), nil, nil
 		}
-		client, err := s.ensureBot(ctx)
+		client, err := s.botForTool(ctx)
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -190,7 +213,7 @@ func (s *Server) registerTools() {
 		if args.UserID == "" {
 			return toolError(fmt.Errorf("user_id is required")), nil, nil
 		}
-		client, err := s.ensureBot(ctx)
+		client, err := s.botForTool(ctx)
 		if err != nil {
 			return toolError(err), nil, nil
 		}
@@ -299,22 +322,31 @@ func (s *Server) onInitialized(ctx context.Context, req *sdkmcp.InitializedReque
 func (s *Server) startBot(ctx context.Context) {
 	go func() {
 		if _, err := s.ensureBot(ctx); err != nil && ctx.Err() == nil {
-			s.sendChannelNotification(fmt.Sprintf("wechat-wire listener failed: %v", err), "error", "", "")
+			s.log("listener failed: %v", err)
+			if state, ok := s.claimLoginNotification(); ok {
+				s.sendLoginNotification(state.Content, state.EventType)
+			}
 		}
 	}()
 }
 
 func (s *Server) ensureBot(ctx context.Context) (bot.Client, error) {
+	client, attempt := s.beginBotInit(ctx)
+	if client != nil {
+		return client, nil
+	}
+	return attempt.await(ctx)
+}
+
+func (s *Server) beginBotInit(ctx context.Context) (bot.Client, *botInitAttempt) {
 	client, attempt, baseCtx, owner := s.claimBotInit(ctx)
 	if client != nil {
 		return client, nil
 	}
-	if !owner {
-		return attempt.await(ctx)
+	if owner {
+		go s.initializeBot(baseCtx, attempt)
 	}
-
-	s.initializeBot(baseCtx, attempt)
-	return attempt.await(ctx)
+	return nil, attempt
 }
 
 func (s *Server) claimBotInit(ctx context.Context) (bot.Client, *botInitAttempt, context.Context, bool) {
@@ -330,8 +362,12 @@ func (s *Server) claimBotInit(ctx context.Context) (bot.Client, *botInitAttempt,
 	if baseCtx == nil {
 		baseCtx = ctx
 	}
-	attempt := &botInitAttempt{done: make(chan struct{})}
+	attempt := &botInitAttempt{done: make(chan struct{}), loginReady: make(chan struct{})}
 	s.botInit = attempt
+	s.loginState = loginState{
+		EventType: "login_starting",
+		Content:   "wechat-wire login is starting. Call wechat_wire_login again if a QR prompt is not returned shortly.",
+	}
 	return nil, attempt, baseCtx, true
 }
 
@@ -358,15 +394,29 @@ func (s *Server) finishBotInit(attempt *botInitAttempt, client bot.Client, err e
 	s.mu.Lock()
 	if err == nil {
 		s.botClient = client
+		s.loginState = loginState{}
+		s.loginNotified = false
+	} else {
+		s.loginState = loginState{
+			EventType: "login_failed",
+			Content:   fmt.Sprintf("wechat-wire login failed: %v. Call wechat_wire_login to retry.", err),
+		}
 	}
 	if s.botInit == attempt {
 		s.botInit = nil
 	}
 	s.mu.Unlock()
 
+	if err != nil {
+		attempt.signalLoginReady()
+	}
 	attempt.client = client
 	attempt.err = err
 	close(attempt.done)
+}
+
+func (a *botInitAttempt) signalLoginReady() {
+	a.loginOnce.Do(func() { close(a.loginReady) })
 }
 
 func (a *botInitAttempt) await(ctx context.Context) (bot.Client, error) {
@@ -378,6 +428,120 @@ func (a *botInitAttempt) await(ctx context.Context) (bot.Client, error) {
 	}
 }
 
+func (s *Server) login(ctx context.Context) (string, error) {
+	client, attempt := s.beginBotInit(ctx)
+	if client != nil {
+		return loggedInStatus(), nil
+	}
+	if state := s.loginStateSnapshot(); state.EventType != "login_starting" && state.Content != "" {
+		return formatLoginState(state), nil
+	}
+
+	timer := time.NewTimer(loginPromptTimeout)
+	defer timer.Stop()
+	select {
+	case <-attempt.loginReady:
+		return s.loginStatusText(), nil
+	case <-attempt.done:
+		if attempt.err == nil {
+			return loggedInStatus(), nil
+		}
+		if state := s.loginStateSnapshot(); state.Content != "" {
+			return formatLoginState(state), nil
+		}
+		return "", attempt.err
+	case <-timer.C:
+		return s.loginStatusText(), nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (s *Server) botForTool(ctx context.Context) (bot.Client, error) {
+	if state := s.loginStateSnapshot(); state.Content != "" {
+		return nil, fmt.Errorf("%s\nCall wechat_wire_login or wechat_wire_status for current login instructions", formatLoginState(state))
+	}
+	client, _ := s.beginBotInit(ctx)
+	if client != nil {
+		return client, nil
+	}
+	return nil, fmt.Errorf("%s\nCall wechat_wire_login or wechat_wire_status for current login instructions", s.loginStatusText())
+}
+
+func (s *Server) runtimeStatus() string {
+	text := status.Runtime(s.version)
+	state, active := s.loginSnapshot()
+	if state.Content == "" && !active && !status.RuntimeInfo(s.version).LoggedIn {
+		state = loginState{
+			EventType: "not_logged_in",
+			Content:   "Call wechat_wire_login to start WeChat QR login.",
+		}
+	}
+	if state.Content == "" {
+		return text
+	}
+	return text + formatLoginState(state) + "\n"
+}
+
+func (s *Server) loginStatusText() string {
+	state, active := s.loginSnapshot()
+	if active {
+		return loggedInStatus()
+	}
+	if state.Content == "" {
+		state = loginState{
+			EventType: "login_starting",
+			Content:   "wechat-wire login is starting. Call wechat_wire_login again shortly for the QR prompt.",
+		}
+	}
+	return formatLoginState(state)
+}
+
+func loggedInStatus() string {
+	return "login_state: logged_in\nlogin_action: no action required"
+}
+
+func formatLoginState(state loginState) string {
+	return fmt.Sprintf("login_state: %s\nlogin_action: %s", state.EventType, state.Content)
+}
+
+func (s *Server) loginStateSnapshot() loginState {
+	state, _ := s.loginSnapshot()
+	return state
+}
+
+func (s *Server) loginSnapshot() (loginState, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loginState, s.botClient != nil
+}
+
+func (s *Server) setLoginState(state loginState, notify bool) bool {
+	s.mu.Lock()
+	s.loginState = state
+	attempt := s.botInit
+	shouldNotify := notify && !s.loginNotified
+	if shouldNotify {
+		s.loginNotified = true
+	}
+	s.mu.Unlock()
+
+	if attempt != nil {
+		attempt.signalLoginReady()
+	}
+	return shouldNotify
+}
+
+func (s *Server) claimLoginNotification() (loginState, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.loginNotified || s.loginState.Content == "" {
+		return loginState{}, false
+	}
+	s.loginNotified = true
+	return s.loginState, true
+}
+
 func (s *Server) botOptions() bot.Options {
 	return bot.Options{
 		CredPath: config.CredentialPath(),
@@ -385,18 +549,30 @@ func (s *Server) botOptions() bot.Options {
 		BotAgent: config.BotAgent(s.version),
 		OnQRURL: func(url string) {
 			s.log("scan QR URL: %s", url)
-			s.sendLoginNotification(
-				fmt.Sprintf("wechat-wire login required. Scan this QR URL with WeChat to continue:\n%s", url),
-				"login_required",
-			)
+			state := loginState{
+				EventType: "login_required",
+				Content: fmt.Sprintf(
+					"wechat-wire login required. Scan this QR URL with WeChat to continue:\n%s\nCall wechat_wire_login or wechat_wire_status to view this prompt again.",
+					url,
+				),
+			}
+			if s.setLoginState(state, true) {
+				s.sendLoginNotification(state.Content, state.EventType)
+			}
 		},
 		OnScanned: func() {
 			s.log("QR scanned")
-			s.sendLoginNotification("wechat-wire login QR code scanned. Confirm the login in WeChat to continue.", "login_scanned")
+			s.setLoginState(loginState{
+				EventType: "login_scanned",
+				Content:   "wechat-wire login QR code scanned. Confirm the login in WeChat to continue.",
+			}, false)
 		},
 		OnExpired: func() {
 			s.log("QR expired")
-			s.sendLoginNotification("wechat-wire login QR code expired. Restart the MCP server to request a new QR URL.", "login_expired")
+			s.setLoginState(loginState{
+				EventType: "login_expired",
+				Content:   "wechat-wire login QR code expired. The SDK is requesting a refreshed QR; call wechat_wire_login again shortly to retrieve it.",
+			}, false)
 		},
 		OnError: func(err error) {
 			s.log("sdk error: %v", err)

@@ -172,7 +172,9 @@ func TestOnInitializedDoesNotBlockOnLogin(t *testing.T) {
 	waitForRunCall(t, client, 1)
 }
 
-func TestBotOptionsNotifyLoginQRCode(t *testing.T) {
+func TestBotOptionsNotifyLoginQRCodeOnceAndExposeLatestPrompt(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_DIR", t.TempDir())
+
 	conn := &captureConnection{}
 	server := NewServer("test", true, func(opts bot.Options) bot.Client {
 		t.Fatal("factory should not be called")
@@ -184,8 +186,11 @@ func TestBotOptionsNotifyLoginQRCode(t *testing.T) {
 	server.mcpSession = &sdkmcp.ServerSession{}
 	server.channelReady = true
 
-	qrURL := "https://wechat.example/qr/login-token"
-	server.botOptions().OnQRURL(qrURL)
+	firstURL := "https://wechat.example/qr/first-token"
+	latestURL := "https://wechat.example/qr/latest-token"
+	options := server.botOptions()
+	options.OnQRURL(firstURL)
+	options.OnQRURL(latestURL)
 
 	req := conn.onlyRequest(t)
 	if req.Method != "notifications/claude/channel" {
@@ -195,7 +200,7 @@ func TestBotOptionsNotifyLoginQRCode(t *testing.T) {
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		t.Fatalf("unmarshal params: %v", err)
 	}
-	if !stringsContainsAll(params.Content, "login required", qrURL) {
+	if !stringsContainsAll(params.Content, "login required", firstURL) {
 		t.Fatalf("content did not include login prompt and QR URL: %q", params.Content)
 	}
 	if params.Meta.EventType != "login_required" {
@@ -204,6 +209,134 @@ func TestBotOptionsNotifyLoginQRCode(t *testing.T) {
 	if params.Meta.MessageType != "login" {
 		t.Fatalf("message_type: got %q want login", params.Meta.MessageType)
 	}
+
+	statusText := server.runtimeStatus()
+	if !stringsContainsAll(statusText, "login_state: login_required", latestURL) {
+		t.Fatalf("status did not expose latest login prompt: %q", statusText)
+	}
+	if _, err := server.botForTool(context.Background()); err == nil || !stringsContainsAll(err.Error(), latestURL, "wechat_wire_login") {
+		t.Fatalf("send tool login guidance: got %v", err)
+	}
+}
+
+func TestBotOptionsLoginProgressDoesNotSendAdditionalNotifications(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_DIR", t.TempDir())
+
+	conn := &captureConnection{}
+	server := NewServer("test", true, nil)
+	server.transport = &channelTransport{
+		conn: &channelConnection{inner: conn, writeMu: &sync.Mutex{}},
+	}
+	server.mcpSession = &sdkmcp.ServerSession{}
+	server.channelReady = true
+
+	options := server.botOptions()
+	options.OnQRURL("https://wechat.example/qr/login-token")
+	options.OnScanned()
+	options.OnExpired()
+
+	conn.onlyRequest(t)
+	statusText := server.runtimeStatus()
+	if !stringsContainsAll(statusText, "login_state: login_expired", "wechat_wire_login") {
+		t.Fatalf("status did not expose expired login state: %q", statusText)
+	}
+}
+
+func TestFailedLoginReplacesStaleQRCodeStatus(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_DIR", t.TempDir())
+
+	server := NewServer("test", true, nil)
+	attempt := &botInitAttempt{done: make(chan struct{}), loginReady: make(chan struct{})}
+	server.botInit = attempt
+	server.loginState = loginState{
+		EventType: "login_required",
+		Content:   "https://wechat.example/qr/expired-token",
+	}
+	server.loginNotified = true
+
+	server.finishBotInit(attempt, nil, errors.New("QR code expired 3 times"))
+	statusText := server.runtimeStatus()
+	if !stringsContainsAll(statusText, "login_state: login_failed", "QR code expired 3 times", "wechat_wire_login") {
+		t.Fatalf("status did not replace stale QR after failure: %q", statusText)
+	}
+}
+
+func TestLoginReturnsQRCodeWithoutWaitingForScan(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_DIR", t.TempDir())
+
+	client := newBlockingClient()
+	qrURL := "https://wechat.example/qr/login-token"
+	server := NewServer("test", true, func(opts bot.Options) bot.Client {
+		client.onLogin = func() { opts.OnQRURL(qrURL) }
+		return client
+	})
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	server.mu.Lock()
+	server.runCtx = runCtx
+	server.mu.Unlock()
+
+	result, err := server.login(context.Background())
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	if !stringsContainsAll(result, "login_state: login_required", qrURL) {
+		t.Fatalf("login result missing QR prompt: %q", result)
+	}
+	if got := client.loginCalls.Load(); got != 1 {
+		t.Fatalf("login calls: got %d want 1", got)
+	}
+	select {
+	case <-client.loginStarted:
+	default:
+		t.Fatal("login returned before the client started")
+	}
+
+	close(client.releaseLogin)
+	waitForRunCall(t, client, 1)
+	deadline := time.After(2 * time.Second)
+	for {
+		if got := server.loginStatusText(); strings.Contains(got, "login_state: logged_in") {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("login state was not cleared after success: %q", server.loginStatusText())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestSendToolStartsLoginWithoutWaitingForScan(t *testing.T) {
+	t.Setenv("WECHAT_WIRE_DIR", t.TempDir())
+
+	client := newBlockingClient()
+	server := NewServer("test", true, func(opts bot.Options) bot.Client { return client })
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	server.mu.Lock()
+	server.runCtx = runCtx
+	server.mu.Unlock()
+
+	startedAt := time.Now()
+	got, err := server.botForTool(context.Background())
+	if got != nil {
+		t.Fatalf("botForTool client: got %T want nil", got)
+	}
+	if err == nil || !stringsContainsAll(err.Error(), "login_state: login_starting", "wechat_wire_login") {
+		t.Fatalf("botForTool login guidance: got %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 200*time.Millisecond {
+		t.Fatalf("botForTool waited for login: %s", elapsed)
+	}
+	select {
+	case <-client.loginStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("background login did not start")
+	}
+
+	close(client.releaseLogin)
+	waitForRunCall(t, client, 1)
 }
 
 func TestSendMessageNotificationIncludesMediaDownloadError(t *testing.T) {
@@ -265,6 +398,7 @@ func stringsContainsAll(s string, values ...string) bool {
 type blockingClient struct {
 	loginStarted chan struct{}
 	releaseLogin chan struct{}
+	onLogin      func()
 	loginCalls   atomic.Int32
 	runCalls     atomic.Int32
 }
@@ -279,6 +413,9 @@ func newBlockingClient() *blockingClient {
 func (c *blockingClient) Login(ctx context.Context, force bool) (*bot.Credentials, error) {
 	if c.loginCalls.Add(1) == 1 {
 		close(c.loginStarted)
+	}
+	if c.onLogin != nil {
+		c.onLogin()
 	}
 	select {
 	case <-ctx.Done():
